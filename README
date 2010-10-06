@@ -1,0 +1,5 @@
+twitter.oauth.py and facebook.oauth.py perform various pull operations from Twitter and Facebook. Must replace hardcoded values of token and secret keys with your own. Usage information is generally available when running the script.
+
+twitter_pull.sql and facebook_pull.sql should create the postgresql databases needed to store the data of these aforementioned scripts.
+
+These scripts are developed under Linux (Ubuntu 10.04). I used Python 2.6.5 and my Postgresql is 8.3.
