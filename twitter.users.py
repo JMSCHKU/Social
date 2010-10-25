@@ -60,10 +60,19 @@ if user_id > 0:
 	    j = simplejson.load(r)
     if ok:
 	l = j
-    	r = {"id": l["id"], "name": l["name"].encode("utf8"), "screen_name": l["screen_name"].encode("utf8"),
-	"description": l["description"].encode("utf8"), "profile_image_url": l["profile_image_url"].encode("utf8"),
-	"url": l["url"].encode("utf8"), "followers_count": l["followers_count"],
-	"utc_offset": l["utc_offset"], "time_zone": l["time_zone"], "profile_background_image_url": l["profile_background_image_url"].encode("utf8"),
+	# adjustments for non-required fields that might be unicode
+	if l["description"] is not None:
+	    l["description"] = l["description"].encode("utf8")
+	if l["url"] is not None:
+	    l["url"] = l["url"].encode("utf8")
+	if l["profile_image_url"] is not None:
+	    l["profile_image_url"] = l["profile_image_url"].encode("utf8")
+	if l["profile_background_image_url"] is not None:
+	    l["profile_background_image_url"] = l["profile_background_image_url"].encode("utf8")
+    	r = {"id": l["id"], "name": l["name"].encode("utf8"), "screen_name": l["screen_name"],
+	"description": l["description"], "profile_image_url": l["profile_image_url"],
+	"url": l["url"], "followers_count": l["followers_count"],
+	"utc_offset": l["utc_offset"], "time_zone": l["time_zone"], "profile_background_image_url": l["profile_background_image_url"],
 	"friends_count": l["friends_count"],"created_at": l["created_at"], "favourites_count": l["favourites_count"],
 	"notifications": l["notifications"],"geo_enabled": l["geo_enabled"],
 	"verified": l["verified"], "statuses_count": l["statuses_count"], "lang": l["lang"],
