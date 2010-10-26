@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 import sys
@@ -11,10 +12,16 @@ import pprint
 pgconn = pg.DB('YOUR_DB', '127.0.0.1', 5432, None, None, 'YOUR_USERNAME', 'YOUR_PASSWORD')
 table_name = "twitter_users"
 
+user_id = 0
+screen_name = ""
+
 no_overwrite = False
 is_oauth = True
 if len(sys.argv) > 1:
-    user_id = sys.argv[1]
+    try:
+	user_id = int(sys.argv[1])
+    except ValueError:
+	screen_name = str(sys.argv[1])
     if len(sys.argv) > 2:
 	for i in range(2,len(sys.argv)):
 	    if sys.argv[i] == "-no" or sys.argv[i] == "--no-overwrite":
@@ -24,16 +31,10 @@ if len(sys.argv) > 1:
 	    if sys.argv[i] == "-na" or sys.argv[i] == "--no-auth":
 		is_oauth = False
 else:
-    print "user_id missing"
+    print "user_id or screen_name missing"
     sys.exit()
 
-try:
-    user_id = str(int(user_id))
-except (ValueError):
-    print "argument invalid: given " + user_id
-    sys.exit()
-
-if user_id > 0:
+if user_id > 0 or len(screen_name) > 0:
     conn = httplib.HTTPConnection("api.twitter.com")
     ok = False
     if is_oauth:
@@ -44,14 +45,20 @@ if user_id > 0:
 	consumer = oauth.Consumer(key = consumer_key, secret = consumer_secret)
 	token = oauth.Token(key = oauth_token, secret = oauth_token_secret)
 	client = oauth.Client(consumer, token)
-	resp, content = client.request("http://api.twitter.com/1/users/show.json?user_id=" + user_id, "GET")
+	if user_id > 0:
+	    resp, content = client.request("http://api.twitter.com/1/users/show.json?user_id=" + str(user_id), "GET")
+	else:
+	    resp, content = client.request("http://api.twitter.com/1/users/show.json?screen_name=" + screen_name, "GET")
 	r = content
 	if len(r) > 2:
 	    ok = True
 	    j = simplejson.loads(r)
     else:
 	try:
-	    conn.request("GET", "/1/users/show.json?user_id=" + user_id)
+	    if user_id > 0:
+		conn.request("GET", "/1/users/show.json?user_id=" + user_id)
+	    else:
+		conn.request("GET", "/1/users/show.json?screen_name=" + screen_name)
 	except (Exception):
 	    sys.exit(sys.exc_info())
 	r = conn.getresponse()
