@@ -1,3 +1,5 @@
+-- Tables that keep the data pulled from Twitter using the twitter.oauth.py script
+
 -- Table: tweets
 
 -- DROP TABLE tweets;
