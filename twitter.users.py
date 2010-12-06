@@ -17,19 +17,27 @@ screen_name = ""
 
 no_overwrite = False
 is_oauth = True
+force_screenname = False
 if len(sys.argv) > 1:
-    try:
-	user_id = int(sys.argv[1])
-    except ValueError:
-	screen_name = str(sys.argv[1])
     if len(sys.argv) > 2:
 	for i in range(2,len(sys.argv)):
 	    if sys.argv[i] == "-no" or sys.argv[i] == "--no-overwrite":
 		no_overwrite = True
+	    if sys.argv[i] == "-u" or sys.argv[i] == "--update":
+		no_overwrite = False
 	    if sys.argv[i] == "-o" or sys.argv[i] == "--oauth":
 		is_oauth = True
 	    if sys.argv[i] == "-na" or sys.argv[i] == "--no-auth":
 		is_oauth = False
+	    if sys.argv[i] == "-fs" or sys.argv[i] == "--force-screenname":
+		force_screenname = True
+    try:
+	if force_screenname:
+	    screen_name = str(sys.argv[1])
+	else:
+	    user_id = long(sys.argv[1])
+    except ValueError:
+	screen_name = str(sys.argv[1])
 else:
     print "user_id or screen_name missing"
     sys.exit()
@@ -38,14 +46,18 @@ if user_id > 0 or len(screen_name) > 0:
     conn = httplib.HTTPConnection("api.twitter.com")
     ok = False
     if is_oauth:
-	consumer_key = "YOUR_KEY"
-	consumer_secret = "YOUR_SECRET"
-	oauth_token = "YOUR_TOKEN"
-	oauth_token_secret = "YOUR_TOKEN_SECRET"
+	consumer_key = "IJIFqySugi5M42VyTrmTDQ"
+	consumer_secret = "5BrsbpTGV8TzQXXPkZ5aTBUBFjd9M7LjgrWgW1I"
+	oauth_token = "16495920-YJJ4TBRukyCGtCYmEerxhjQzfRfSgw3pg9CDsyOWW"
+	oauth_token_secret = "QlXZlp9ZqhTDjiYerVzMRZLuGXZUzl1FzyNNCbveaQ"
+	#consumer_key = "YOUR_KEY"
+	#consumer_secret = "YOUR_SECRET"
+	#oauth_token = "YOUR_TOKEN"
+	#oauth_token_secret = "YOUR_TOKEN_SECRET"
 	consumer = oauth.Consumer(key = consumer_key, secret = consumer_secret)
 	token = oauth.Token(key = oauth_token, secret = oauth_token_secret)
 	client = oauth.Client(consumer, token)
-	if user_id > 0:
+	if user_id > 0 and not force_screenname:
 	    resp, content = client.request("http://api.twitter.com/1/users/show.json?user_id=" + str(user_id), "GET")
 	else:
 	    resp, content = client.request("http://api.twitter.com/1/users/show.json?screen_name=" + screen_name, "GET")
@@ -53,9 +65,14 @@ if user_id > 0 or len(screen_name) > 0:
 	if len(r) > 2:
 	    ok = True
 	    j = simplejson.loads(r)
+	else:
+	    print r
+	if "error" in j:
+	    print "Error: " + j["error"]
+	    ok = False
     else:
 	try:
-	    if user_id > 0:
+	    if user_id > 0 and not force_screenname:
 		conn.request("GET", "/1/users/show.json?user_id=" + user_id)
 	    else:
 		conn.request("GET", "/1/users/show.json?screen_name=" + screen_name)
@@ -70,6 +87,8 @@ if user_id > 0 or len(screen_name) > 0:
 	# adjustments for non-required fields that might be unicode
 	if l["description"] is not None:
 	    l["description"] = l["description"].encode("utf8")
+	if l["location"] is not None:
+	    l["location"] = l["location"].encode("utf8")
 	if l["url"] is not None:
 	    l["url"] = l["url"].encode("utf8")
 	if l["profile_image_url"] is not None:
@@ -82,18 +101,19 @@ if user_id > 0 or len(screen_name) > 0:
 	"utc_offset": l["utc_offset"], "time_zone": l["time_zone"], "profile_background_image_url": l["profile_background_image_url"],
 	"friends_count": l["friends_count"],"created_at": l["created_at"], "favourites_count": l["favourites_count"],
 	"notifications": l["notifications"],"geo_enabled": l["geo_enabled"],
+	"protected": l["protected"],
 	"verified": l["verified"], "statuses_count": l["statuses_count"], "lang": l["lang"],
 	"contributors_enabled": l["contributors_enabled"], "follow_request_sent": l["follow_request_sent"],
 	"listed_count": l["listed_count"], "show_all_inline_media": l["show_all_inline_media"],
+	"location": l["location"],
 	"retrieved": "NOW()"}
 	try:
 	    pgconn.insert(table_name, r)
 	except pg.ProgrammingError, pg.InternalError:
-	    print "user duplicate found in DB... trying to update instead"
 	    try:
-		pgconn.update(table_name, r)
+		if not no_overwrite:
+		    print "user duplicate found in DB... trying to update instead"
+		    pgconn.update(table_name, r)
 	    except:
 		print "an error has occurred (row cannot be updated)"
 	    print r
-    else:
-	print "Error: " + r

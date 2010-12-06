@@ -11,7 +11,8 @@ import datetime
 import string
 import types
 
-pgconn = pg.DB('YOUR_DB', '127.0.0.1', 5432, None, None, 'YOUR_USERNAME', 'YOUR_PASSWORD')
+pgconn = pg.DB('jmsc', '127.0.0.1', 5432, None, None, 'jmsc', 'Sohy8Eet')
+#pgconn = pg.DB('YOUR_DB', '127.0.0.1', 5432, None, None, 'YOUR_USERNAME', 'YOUR_PASSWORD')
 usage = "sinastorage.py [option::1=user_timeline,2=users,3=friends,4=followers] [name of file to insert in DB] [user_id for friends/followers (source_id)]"
 table_name = "sinaweibo"
 

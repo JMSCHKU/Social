@@ -5,7 +5,7 @@ import pg
 import httplib
 import simplejson
 
-pgconn = pg.DB('jmsc', '127.0.0.1', 5432, None, None, 'jmsc', 'YOUR_PASSWORD')
+pgconn = pg.DB('YOUR_DB', '127.0.0.1', 5432, None, None, 'YOUR_USERNAME', 'YOUR_PASSWORD')
 
 usage = "twitter.rel [user_id] [--followers|--following] [OPT:--no-duplicates]"
 
