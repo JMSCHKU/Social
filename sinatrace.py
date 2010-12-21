@@ -63,6 +63,7 @@ WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": 
     out["missing_users"] = missing_users
     out["missing_users_count"] = len(missing_users)
     out["reposts"] = rts
+    out["reposts_count"] = len(rts)
     out["generated"] = long(time.mktime(datetime.datetime.now().timetuple())) * 1000
     out["generated_end"] = datetime.datetime.now().strftime("%c")
     if get_users and len(missing_users) > 10: # print missing users list
