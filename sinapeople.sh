@@ -1,0 +1,1 @@
+/home/csam/bin/sinapeople.sh
