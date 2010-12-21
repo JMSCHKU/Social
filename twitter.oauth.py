@@ -3,12 +3,12 @@
 
 import sys
 import pg
+import mypass
 import httplib
 import simplejson
 import time
 
 import oauth2 as oauth
-from oauthtwitter import OAuthApi
 import pprint
 
 import datetime
@@ -18,8 +18,9 @@ import types
 MAXIMUM_TRIES = 50
 
 usage = "usage: twitter.oauth.py [1=mentions; 2=followers info by user_id, 3=single user info by screen_name,\
-4=all tweets by user_id, 5=all tweets by screen_name] [-d|--database||-c|--csv-out]"
-pgconn = pg.DB('jmsc', '127.0.0.1', 5432, None, None, 'jmsc', 'YOUR_PASSWORD')
+4=all tweets by user_id, 5=all tweets by screen_name] [-d|--database||-c|--csv-out||-b|--to-beginning]"
+
+pgconn = mypass.getConn()
 
 sql_users_fields = "user_id,name,screen_name,description,profile_image_url,url,protected,followers_count,friends_count,created_at,\
 favourites_count,utc_offset,time_zone,profile_background_image_url,profile_use_background_image,notifications,geo_enabled,verified,\
@@ -27,6 +28,8 @@ statuses_count,lang,contributors_enabled,follow_request_sent,listed_count,show_a
 
 todb = False
 tocsv = True
+tobeginning = False
+doupdate = False
 
 if len(sys.argv) > 1:
     try:
@@ -51,6 +54,10 @@ if len(sys.argv) > 2:
 	if sys.argv[i] == "-d" or sys.argv[i] == "--database":
 	    tocsv = False
 	    todb = True
+	if sys.argv[i] == "-b" or sys.argv[i] == "--to-beginning":
+	    tobeginning = True
+	if sys.argv[i] == "-u" or sys.argv[i] == "--update":
+	    doupdate = True
 try:
     if opt == 1:
 	url = "http://api.twitter.com/1/statuses/mentions.json?count=800&include_rts=true&include_entities=true"
@@ -72,10 +79,12 @@ try:
 except pg.DatabaseError:
     pass
 
-consumer_key = "YOUR_KEY"
-consumer_secret = "YOUR_SECRET"
-oauth_token = "YOUR_TOKEN"
-oauth_token_secret = "YOUR_TOKEN_SECRET"
+twitterOauth = mypass.getTwitterOauth()
+
+consumer_key = twitterOauth["consumer_key"]
+consumer_secret = twitterOauth["consumer_secret"]
+oauth_token = twitterOauth["oauth_token"]
+oauth_token_secret = twitterOauth["oauth_token_secret"]
 
 request_token_url = 'http://twitter.com/oauth/request_token'
 access_token_url = 'http://twitter.com/oauth/access_token'
@@ -143,7 +152,7 @@ elif opt == 4 or opt == 5:
     if tocsv:
 	f = open(fname, "w")
 	cw = csv.writer(f, delimiter="\t", quoting=csv.QUOTE_MINIMAL, quotechar='"', escapechar="\\", lineterminator="\n")
-	cw.writerow(["id", "created_at", "text", "in_reply_to_user_id", "in_reply_to_screen_name", "in_reply_to_status_id"])
+	cw.writerow(["id", "created_at", "text", "in_reply_to_user_id", "in_reply_to_screen_name", "in_reply_to_status_id", "screen_name", "user_id"])
     elif todb:
 	print "to DB"
     #missed_once = False
@@ -159,14 +168,17 @@ elif opt == 4 or opt == 5:
 	    resp, content = client.request(url + "&page=" + str(page), "GET")
 	    print resp['status']
 	    print resp
-	    time.sleep(1)
+	    time.sleep(0.1)
 	    if resp['status'] == '400':
 		if int(resp['x-ratelimit-remaining']) <= 0:
-		    time.sleep(300)
+		    time.sleep(100)
+	    elif resp['status'] == '401':
+		print "unauthorized 401: " + str(user_id)
+		break
 	if resp['status'] == '200':
 	    js = simplejson.loads(content)
-	    if int(resp['x-ratelimit-remaining']) <= 30:
-		time.sleep(2400)
+	    if int(resp['x-ratelimit-remaining']) <= 20:
+		time.sleep(400)
 	elif tries >= MAXIMUM_TRIES:
 	    if tocsv:
 		f.write("ERROR: maximum tries")
@@ -180,20 +192,33 @@ elif opt == 4 or opt == 5:
 		print "ERROR: status " + str(resp['status'])
 	    sys.exit()
 	last_tweet = None
-	try:
-	    for j in range(len(js)):
-		l = js[j]
-		last_tweet = l
-		if l["in_reply_to_user_id"] != None and type(l["in_reply_to_user_id"]) is types.StringType and len(l["in_reply_to_user_id"]) == 2:
-		    l["in_reply_to_user_id"] = None
-		if tocsv:
-		    r = list()
-		    r = [l["id"], l["created_at"], l["text"].encode("utf8"), l["in_reply_to_user_id"], l["in_reply_to_screen_name"], l["in_reply_to_status_id"]]
-		    cw.writerow(r)
-		elif todb:
+	for j in range(len(js)):
+	    l = js[j]
+	    last_tweet = l
+	    if l["in_reply_to_user_id"] != None and type(l["in_reply_to_user_id"]) is types.StringType and len(l["in_reply_to_user_id"]) == 2:
+		l["in_reply_to_user_id"] = None
+	    if tocsv:
+		r = list()
+		r = [l["id"], l["created_at"], l["text"].encode("utf8"), l["in_reply_to_user_id"], l["in_reply_to_screen_name"], l["in_reply_to_status_id"]]
+		if opt == 4:
+		    r.extend(["",user_id])
+		elif opt == 5:
+		    r.append(screen_name)
+		    if l["user"] is not None:
+			r.append(l["user"]["id"])
+		    else:
+			r.append("")
+		cw.writerow(r)
+	    elif todb:
+		try:
 		    r = dict()
+		    row = None
 		    r = {"id": l["id"], "created_at": l["created_at"], "text": l["text"].encode("utf8"), "in_reply_to_user_id": l["in_reply_to_user_id"],\
 			"in_reply_to_status_id": l["in_reply_to_status_id"]}
+		    #print l
+		    if "retweeted_status" in l:
+			if l["retweeted_status"] is not None:
+			    r["retweeted_status"] = l["retweeted_status"]["id"]
 		    if opt == 4:
 			r["user_id"] = user_id
 		    elif opt == 5:
@@ -201,14 +226,35 @@ elif opt == 4 or opt == 5:
 			    r["user_id"] = l["user"]["id"]
 			r["screen_name"] = screen_name
 		    #print r
-		    pgconn.insert("tweets", r)
-	except pg.ProgrammingError, pg.InternalError:
-	    print last_tweet
-	    print "tweets up to date (duplicate found in DB)"
-	    break
+		    row = pgconn.insert("tweets", r)
+		    if row is not None and l["geo"] is not None:
+			if "type" in l["geo"] and l["geo"]["type"] == "Point" and "coordinates" in l["geo"] and l["geo"]["coordinates"] is not None and len(l["geo"]["coordinates"]) == 2:
+			    lat = l["geo"]["coordinates"][0]
+			    lng = l["geo"]["coordinates"][1]
+			    wkt_point = "POINT(" + str(lat) + " " + str(lng) + ")"
+			    sql = "UPDATE %(table_name)s SET geo = ST_GeomFromText('%(wkt_point)s', 4326) WHERE id = %(id)d " % {"table_name": "tweets", "wkt_point": wkt_point, "id": row["id"]}
+			    try:
+				pgconn.query(sql)
+			    except:
+				print sql
+				print "geo error: " + wkt_point
+		except pg.ProgrammingError, pg.InternalError:
+		    if not tobeginning:
+			print last_tweet
+			print "tweets up to date (duplicate found in DB)"
+			sys.exit()
+			break
+		    try:
+			if doupdate:
+			    pgconn.update("tweets", r)
+			else:
+			    print last_tweet
+			    print "tweets up to date (duplicate found in DB)"
+		    except:
+			print "an error has occurred (row cannot be updated)"
 	print(len(js))
 	if len(js) <= 0:
 	    break
-	time.sleep(1)
+	time.sleep(0.1)
     if tocsv:
 	f.close()
