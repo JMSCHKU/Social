@@ -8,8 +8,10 @@ import simplejson
 import datetime
 import oauth2 as oauth
 import pprint
+import mypass
 
-pgconn = pg.DB('YOUR_DB', '127.0.0.1', 5432, None, None, 'YOUR_USERNAME', 'YOUR_PASSWORD')
+pgconn = mypass.getConn()
+
 table_name = "twitter_users"
 
 user_id = 0
@@ -46,14 +48,13 @@ if user_id > 0 or len(screen_name) > 0:
     conn = httplib.HTTPConnection("api.twitter.com")
     ok = False
     if is_oauth:
-	consumer_key = "IJIFqySugi5M42VyTrmTDQ"
-	consumer_secret = "5BrsbpTGV8TzQXXPkZ5aTBUBFjd9M7LjgrWgW1I"
-	oauth_token = "16495920-YJJ4TBRukyCGtCYmEerxhjQzfRfSgw3pg9CDsyOWW"
-	oauth_token_secret = "QlXZlp9ZqhTDjiYerVzMRZLuGXZUzl1FzyNNCbveaQ"
-	#consumer_key = "YOUR_KEY"
-	#consumer_secret = "YOUR_SECRET"
-	#oauth_token = "YOUR_TOKEN"
-	#oauth_token_secret = "YOUR_TOKEN_SECRET"
+	twitterOauth = mypass.getTwitterOauth()
+
+	consumer_key = twitterOauth["consumer_key"]
+	consumer_secret = twitterOauth["consumer_secret"]
+	oauth_token = twitterOauth["oauth_token"]
+	oauth_token_secret = twitterOauth["oauth_token_secret"]
+
 	consumer = oauth.Consumer(key = consumer_key, secret = consumer_secret)
 	token = oauth.Token(key = oauth_token, secret = oauth_token_secret)
 	client = oauth.Client(consumer, token)
