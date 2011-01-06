@@ -10,7 +10,10 @@ try: import simplejson as json
 except ImportError: import json
 import time
 import datetime
+import string
 import mypass
+
+__author__ = "Cedric Sam"
 
 usage = "sinatrace.py [id of status to trace] "
 table_name = "sinaweibo"
@@ -77,6 +80,40 @@ WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": 
 	    return json.dumps(out, sort_keys=True, indent=4)
     else:
 	return out
+
+def gviz_trends(tid, interval="", outformat="json"):
+    try:
+	tid = long(tid)
+    except ValueError:
+	sys.exit()
+    import gviz_api
+    sql_interval = "to_char(date_trunc('hour', s.created_at), 'YYYY-MM-DD HH24:MI')"
+    if interval == "":
+	pass
+    elif string.lower(interval) == "10m":
+	sql_interval = "substring(to_char(s.created_at, 'YYYY-MM-DD HH24:MI') for 15)||0"
+    elif string.lower(interval[len(interval)-1]) == "m":
+	mins_interval = interval[0:len(interval)-1]
+	sql_interval = "to_char(date_trunc('hour', s.created_at) + \
+INTERVAL '%(mins_interval)s min' * ROUND(date_part('minute', s.created_at) \
+/ %(mins_interval)s.0), 'YYYY-MM-DD HH24:MI')" % {"mins_interval": mins_interval}
+    sql = "SELECT %(interval)s AS time, COUNT(*) AS count, COUNT(DISTINCT user_id) AS users \
+FROM sinaweibo s WHERE retweeted_status = %(tid)d GROUP BY time ORDER BY time " % {"tid": tid, "interval": sql_interval}
+    rows = pgconn.query(sql).dictresult()
+    description = {"time": ("datetime", "Time"),
+		    "count": ("number", "statuses"),
+		    "users": ("number", "distinct users")}
+    columns_order = "time", "count", "users"
+    order_by = "time"
+    data = []
+    for r in rows:
+	data.append({"time": datetime.datetime.strptime(r["time"], "%Y-%m-%d %H:%M"), "count": r["count"], "users": r["users"]})
+    data_table = gviz_api.DataTable(description)
+    data_table.LoadData(data)
+    if outformat == "json":
+	return data_table.ToJSon(columns_order, order_by)
+    else:
+	return data_table.ToJSCode("jscode_data", columns_order, order_by)
 
 if __name__ == "__main__":
     if len(sys.argv) < 1:
