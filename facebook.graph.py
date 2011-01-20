@@ -11,17 +11,20 @@ import datetime
 import httplib
 import urllib
 
+import mypass
+
 usage = "usage: facebook.oauth.py [Facebook ID or username] [-h|--http-header|-co|--csv-out|-d|--database\
 |-t OBJTYPE|--type=OBJTYPE|-c OBJTYPE|--connection-type=CONNTYPE] "
 helptxt = "[OBJTYPE] currently supported: user|group \n\
 [CONNTYPE] currently supported: feed|members \n\
 Graph API Reference: http://developers.facebook.com/docs/reference/api/ "
 
-pgconn = pg.DB('YOUR_DB', '127.0.0.1', 5432, None, None, 'YOUR_USERNAME', 'YOUR_PASSWORD')
+pgconn = mypass.getConn()
 
 FB_GRAPH_API = "graph.facebook.com"
-APP_ID = "(a long digit-only string)"
-ACCESS_TOKEN = "(some key that's always the same for a given user)-(your user id)|(some funky key that changes)"
+fbook_oauth = mypass.getFacebookOauth()
+APP_ID = str(fbook_oauth["app_id"])
+ACCESS_TOKEN = fbook_oauth["access_token"]
 
 def getMetadata(fbid, showHeaders=False):
     params = dict()
