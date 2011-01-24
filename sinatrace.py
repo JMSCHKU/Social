@@ -27,11 +27,11 @@ def sinatrace(tid, minimal=False, extra_fields=False, get_users=False, outformat
 	sys.exit()
     if extra_fields:
 	extra_fields = ", u.name user_name, u.screen_name user_screen_name, u.domain user_domain, \
-u.province user_province, u.city user_city, \
+u.province user_province, u.city user_city, u.gender user_gender, \
 u.followers_count user_followers_count, u.friends_count user_friends_count, u.retrieved user_retrieved "
     else:
 	extra_fields = ""
-    sql = "SELECT s.id, s.created_at, s.user_id, s.text %(extra_fields)s \
+    sql = "SELECT s.id, s.created_at, s.user_id, s.text, u.id AS user_id_ref %(extra_fields)s \
 FROM sinaweibo s LEFT JOIN sinaweibo_users u ON s.user_id = u.id \
 WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": extra_fields}
     rows = pgconn.query(sql).dictresult()
@@ -41,6 +41,7 @@ WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": 
     out["generated_start"] = datetime.datetime.now().strftime("%c")
     ids_cache = dict()
     missing_users = list()
+    missing_users_ids = list()
     for r in rows:
 	m = re.findall("//@([^: ]*)", r["text"])
 	refs = list()
@@ -62,6 +63,8 @@ WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": 
 	    refs.append(ref)
 	    count += 1
 	r["references"] = refs
+	if get_users and r["user_id_ref"] is None:
+	    missing_users_ids.append(r["user_id"])
 	rts.append(r)
     out["missing_users"] = missing_users
     out["missing_users_count"] = len(missing_users)
@@ -69,7 +72,11 @@ WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": 
     out["reposts_count"] = len(rts)
     out["generated"] = long(time.mktime(datetime.datetime.now().timetuple())) * 1000
     out["generated_end"] = datetime.datetime.now().strftime("%c")
-    if get_users and len(missing_users) > 10: # print missing users list
+    if get_users and len(missing_users_ids) > 0:
+	f = open(str(tid) + "_missing_users_ids.txt", "w")
+	for x in missing_users_ids:
+	    f.write(str(x) + "\n")
+    if get_users and len(missing_users) > 0: # print missing users list
 	f = open(str(tid) + "_missing_users.txt", "w")
 	for x in missing_users:
 	    f.write(str(x) + "\n")
@@ -81,42 +88,97 @@ WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": 
     else:
 	return out
 
-def gviz_trends(tid, interval="", outformat="json"):
+def gviz_trends(tid, req_id=0, interval="", period="", province=0, outformat="json"):
     try:
 	tid = long(tid)
     except ValueError:
 	sys.exit()
     import gviz_api
     sql_interval = "to_char(date_trunc('hour', s.created_at), 'YYYY-MM-DD HH24:MI')"
+    # Interval part
+    dateformat = "%Y-%m-%d %H:%M"
     if interval == "":
-	pass
+	delta_t = datetime.timedelta(hours=1)
     elif string.lower(interval) == "10m":
+	delta_t = datetime.timedelta(minutes=10)
 	sql_interval = "substring(to_char(s.created_at, 'YYYY-MM-DD HH24:MI') for 15)||0"
     elif string.lower(interval[len(interval)-1]) == "m":
 	mins_interval = interval[0:len(interval)-1]
+	delta_t = datetime.timedelta(minutes=mins_interval)
 	sql_interval = "to_char(date_trunc('hour', s.created_at) + \
 INTERVAL '%(mins_interval)s min' * ROUND(date_part('minute', s.created_at) \
 / %(mins_interval)s.0), 'YYYY-MM-DD HH24:MI')" % {"mins_interval": mins_interval}
+    elif string.lower(interval) == "d":
+	dateformat = "%Y-%m-%d"
+	delta_t = datetime.timedelta(days=1)
+	sql_interval = "date(s.created_at) "
+    else:
+	delta_t = datetime.timedelta(hours=1)
+    # Period part
+    if len(period) > 0:
+	measure = string.lower(period[len(period)-1])
+	try:
+	    nb = int(str(period[0:len(period)-1]))
+	except ValueError:
+	    nb = 1
+	today = datetime.date.today()
+	datedatatype = "string"
+	if measure == "d":
+	    basetime = today - datetime.timedelta(days=nb)
+	elif measure == "w":
+	    basetime = today - datetime.timedelta(weeks=nb)
+	elif measure == "m":
+	    basetime = datetime.date(today.year+(today.month-nb-1)/12,(today.month-nb-1)%12+1, today.day)
+    else:
+	basetime = None
+    if basetime is None:
+	sql_period = ""
+    else:
+	basetime = datetime.datetime.combine(basetime, datetime.time())
+	sql_period = " AND s.created_at >= '%s' " % basetime.strftime("%Y-%m-%d")
+    sql_location = ""
+    if province > 0:
+	sql_location = " AND u.province = %d " % province
     sql = "SELECT %(interval)s AS time, COUNT(*) AS count, COUNT(DISTINCT user_id) AS users \
-FROM sinaweibo s WHERE retweeted_status = %(tid)d GROUP BY time ORDER BY time " % {"tid": tid, "interval": sql_interval}
+FROM sinaweibo s LEFT JOIN sinaweibo_users u ON s.user_id = u.id WHERE retweeted_status = %(tid)d %(sql_period)s %(sql_location)s GROUP BY time ORDER BY time " % {"tid": tid, "interval": sql_interval, "sql_period": sql_period, "sql_location": sql_location}
     rows = pgconn.query(sql).dictresult()
-    description = {"time": ("datetime", "Time"),
+    description = {"time": ("string", "Time"),
 		    "count": ("number", "statuses"),
 		    "users": ("number", "distinct users")}
     columns_order = "time", "count", "users"
     order_by = "time"
     data = []
+    if basetime is None:
+	basetime = datetime.datetime.strptime(rows[0]["time"], dateformat)
+    elif len(rows) > 0:
+	try:
+	    datastart = datetime.datetime.strptime(rows[0]["time"], dateformat)
+	except:
+	    dateformat = "%Y-%m-%d"
+	    datastart = datetime.datetime.strptime(rows[0]["time"], dateformat)
+	while basetime + delta_t < datastart:
+	    data.append({"time": datetime.datetime.strftime(basetime, dateformat), "count": 0, "users": 0})
+	    basetime += delta_t
     for r in rows:
-	data.append({"time": datetime.datetime.strptime(r["time"], "%Y-%m-%d %H:%M"), "count": r["count"], "users": r["users"]})
+	thistime = datetime.datetime.strptime(r["time"], dateformat)
+	while basetime + delta_t < thistime:
+	    #data.append({"time": basetime, "count": 0, "users": 0})
+	    data.append({"time": datetime.datetime.strftime(basetime, dateformat), "count": 0, "users": 0})
+	    basetime += delta_t
+	#data.append({"time": thistime, "count": r["count"], "users": r["users"]})
+	data.append({"time": r["time"], "count": r["count"], "users": r["users"]})
+	basetime = thistime + delta_t
     data_table = gviz_api.DataTable(description)
     data_table.LoadData(data)
     if outformat == "json":
-	return data_table.ToJSon(columns_order, order_by)
+	return data_table.ToJSon(columns_order, order_by, req_id)
+    elif outformat == "jsonresp":
+	return data_table.ToJSonResponse(columns_order, order_by, req_id)
     else:
-	return data_table.ToJSCode("jscode_data", columns_order, order_by)
+	return data_table.ToJSCode("jscode_data", columns_order, order_by, req_id)
 
 if __name__ == "__main__":
-    if len(sys.argv) < 1:
+    if len(sys.argv) < 2:
 	print usage
 	sys.exit()
     minimal = False
