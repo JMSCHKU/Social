@@ -10,6 +10,7 @@ import csv
 import datetime
 import httplib
 import urllib
+import json
 
 import mypass
 
@@ -108,19 +109,24 @@ if __name__ == "__main__":
     # process according to object type
     if allfields:
        	if fbobjtype == "user":
-	    fields = "id,name,first_name,last_name,link,locale,updated_time,timezone,gender,verified,third_party_id,location"
+	    fields = "id,name,first_name,last_name,link,locale,updated_time,timezone,gender,verified,third_party_id,location,picture"
 	elif fbobjtype == "group":
 	    fields = "feed,members,docs"
 	elif fbobjtype == "event":
 	    fields = "feed,noreply,maybe,invited,attending,declined,picture"
+	elif fbobjtype == "page":
+	    fields = "id,name,description,picture,category,link,website,username,products,fan_count,founded,company_overview,mission"
+	elif fbobjtype == "application":
+	    fields = "id,name,description,picture,link,category"
 	else:
-	    fields = "feed,members,noreply,maybe,invited,attending,declined,picture,docs" # grab-all fields
+	    fields = ""#feed,members,noreply,maybe,invited,attending,declined,picture,docs" # grab-all fields
 
     # get the parameters
     params = dict()
     params['access_token'] = APP_ID + "|" + ACCESS_TOKEN
     params['fields'] = fields
     params['metadata'] = 1
+    params['type'] = fbobjtype
 
     # form the url
     url = "/" + str(fbidname)
@@ -148,11 +154,20 @@ if __name__ == "__main__":
     # load the response as json string
     js = json.loads(r.read())
 
+    # Handling of errors returned by the server
+    if "error" in js:
+	print js["error"]
+	sys.exit(sys.exc_info())
+    if "error_msg" in js:
+	print js["error_msg"]
+	sys.exit(sys.exc_info())
+
+
     # break if the reflected type does not match the one specified
     if fbobjtype is None:
 	fbobjtype = js["type"]
     if js["type"] != fbobjtype:
-	print "Specified type (%(stype)s) does not match reflected one (%(rtype)s) " % { "stype": fbobjtype, "rtype": js["type"]}
+	print "Specified type (%(stype)s) does not match reflected one [real type:%(rtype)s] " % { "stype": fbobjtype, "rtype": js["type"]}
 	sys.exit()
 
     if csvout:
@@ -170,14 +185,56 @@ if __name__ == "__main__":
     if database:
 	if fbobjtype == "user":
 	    js['retrieved'] = "NOW()"
+	    for a in ["name", "first_name", "last_name"]:
+		if a in js and js[a] is not None:
+		    js[a] = js[a].encode("utf8")
 	    try:
 		pgconn.insert("facebook_users", js)
+		print str(js["id"]) + "\t" + js["first_name"] + "\t" + js["last_name"]
 	    except pg.ProgrammingError:
 		try:
 		    if allowUpdate:
 			pgconn.update("facebook_users", js)
 		except pg.ProgrammingError:
 		    print "Cannot update"
+		    print js
+	if fbobjtype == "page":
+	    if "location" in js:
+		js["location"] = json.dumps(js["location"])
+	    for a in ["name", "description", "location", "icon", "picture", "products", "website", "founded", "company_overview", "mission"]:
+		if a in js and js[a] is not None:
+		    js[a] = js[a].encode("utf8")
+	    if "fan_count" in js:
+		js["likes"] = js["fan_count"]
+	    table_name = str("facebook_%ss" % fbobjtype)
+	    try:
+		pgconn.insert(table_name, js)
+	    except pg.ProgrammingError:
+		try:
+		    if allowUpdate:
+			print "Cannot insert, will update instead"
+			pgconn.update(table_name, js)
+		except pg.ProgrammingError:
+		    print "Cannot update"
+		    print js
+	if fbobjtype == "application":
+	    js['retrieved'] = "NOW()"
+	    for a in ["name", "description", "picture", "link"]:
+		if a in js and js[a] is not None:
+		    js[a] = js[a].encode("utf8")
+	    table_name = str("facebook_%ss" % fbobjtype)
+	    try:
+		pgconn.insert(table_name, js)
+		print str(str(js["id"]))
+	    except pg.ProgrammingError:
+		try:
+		    if allowUpdate:
+			print "Cannot insert, will update instead"
+			pgconn.update(table_name, js)
+		    #print "duplicate: " + js["id"]
+		except pg.ProgrammingError:
+		    print "Cannot update"
+		    print js
 	if fbobjtype == "group" or fbobjtype == "event":
     	    for x in ["name", "description", "location", "icon", "picture"]:
 		if x in js and js[x] is not None:
