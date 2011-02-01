@@ -96,7 +96,7 @@ if __name__ == "__main__":
 	elif fbobjtype == "page":
 	    fields = "id,name,description,picture,category,link,website,username,products,fan_count,founded,company_overview,mission"
 	elif fbobjtype == "post":
-	    fields = "id,name,description,picture,message,link,caption,type,created_time,updated_time,properties,from,likes,comments,icon,source,privacy"
+	    fields = "id,name,description,picture,message,link,caption,type,created_time,updated_time,properties,from,to,likes,comments,icon,source,privacy"
 	    limit = min(500, limit)
 	elif fbobjtype == "application":
 	    fields = "id,name,description,picture,link,category"
@@ -237,6 +237,8 @@ if __name__ == "__main__":
 			x[a] = x[a].encode("utf8")
 		if "from" in x:
 		    x["from"] = x["from"]["id"]
+		if "to" in x:
+		    x["to"] = x["to"]["data"][0]["id"]
 		if "properties" in x:
 		    x["properties"] = json.dumps(x["properties"]).encode("utf8")
 		if "comments" in x:

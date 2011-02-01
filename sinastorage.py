@@ -5,7 +5,6 @@
 
 import sys
 import pg
-import mypass
 import simplejson
 import time
 import datetime
@@ -21,7 +20,7 @@ pgconn = mypass.getConn()
 
 doupdate = False
 justretweets = False
-sleeptime = 600
+sleeptime = 300
 
 if len(sys.argv) > 2:
     try:
@@ -63,6 +62,10 @@ if opt == 1:
 	sys.exit()
     if "error" in js[0]:
 	print js[0]["error"]
+	if js[0]["error"].startswith("40302"):
+	    sys.exit()
+	if js[0]["error"].startswith("40023"):
+	    sys.exit()
 	time.sleep(sleeptime)
 	sys.exit()
     for j in range(len(js)):
@@ -131,6 +134,10 @@ elif opt == 2:
 	sys.exit()
     if "error" in js[0]:
 	print js[0]["error"]
+	if js[0]["error"].startswith("40302"):
+	    sys.exit()
+	if js[0]["error"].startswith("40023"):
+	    sys.exit()
 	time.sleep(sleeptime)
 	sys.exit()
     for l in js:

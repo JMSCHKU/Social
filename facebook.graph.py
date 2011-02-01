@@ -56,7 +56,7 @@ if __name__ == "__main__":
     fields = ""
     fbobjtype = None
     fbconntype = None
-    allowUpdate = True
+    allowUpdate = False
 
     if len(sys.argv) > 1:
 	if sys.argv[1] == "?" or sys.argv[1] == "--help":
@@ -87,6 +87,8 @@ if __name__ == "__main__":
 		csvout = True
 	    if sys.argv[i] == "-no" or sys.argv[i] == "--no-overwrite":
 		allowUpdate = False
+	    if sys.argv[i] == "-u" or sys.argv[i] == "--update":
+		allowUpdate = True
 	    if sys.argv[i] == "-d" or sys.argv[i] == "--database":
 		database = True
 	    if sys.argv[i] == "-a" or sys.argv[i] == "--all-fields":
@@ -109,15 +111,18 @@ if __name__ == "__main__":
     # process according to object type
     if allfields:
        	if fbobjtype == "user":
-	    fields = "id,name,first_name,last_name,link,locale,updated_time,timezone,gender,verified,third_party_id,location,picture"
+	    fields = "id,name,first_name,last_name,link,locale,updated_time,timezone,gender,verified,third_party_id,location"
 	elif fbobjtype == "group":
-	    fields = "feed,members,docs"
+	    fields = "id,name,feed,members,docs,icon,owner,description,link,privacy,updated_time"
+	    #fields = "feed,members,docs"
 	elif fbobjtype == "event":
-	    fields = "feed,noreply,maybe,invited,attending,declined,picture"
+	    fields = "id,name,description,feed,attending,declined,maybe,noreply,invited,venue,owner,privacy,updated_time,start_time,end_time,location"
+	    #fields = "feed,noreply,maybe,invited,attending,declined,picture"
 	elif fbobjtype == "page":
-	    fields = "id,name,description,picture,category,link,website,username,products,fan_count,founded,company_overview,mission"
+	    fields = "id,name,category,feed,statuses,photos,link,website,username,products,fan_count,founded,company_overview,mission"
+	    #fields = "id,name,description,picture,category,link,website,username,products,fan_count,founded,company_overview,mission"
 	elif fbobjtype == "application":
-	    fields = "id,name,description,picture,link,category"
+	    fields = "id,name,description,link,category"
 	else:
 	    fields = ""#feed,members,noreply,maybe,invited,attending,declined,picture,docs" # grab-all fields
 
@@ -190,7 +195,8 @@ if __name__ == "__main__":
 		    js[a] = js[a].encode("utf8")
 	    try:
 		pgconn.insert("facebook_users", js)
-		print str(js["id"]) + "\t" + js["first_name"] + "\t" + js["last_name"]
+		if showheader:
+		    print str(js["id"]) + "\t" + js["first_name"] + "\t" + js["last_name"]
 	    except pg.ProgrammingError:
 		try:
 		    if allowUpdate:
@@ -199,6 +205,7 @@ if __name__ == "__main__":
 		    print "Cannot update"
 		    print js
 	if fbobjtype == "page":
+	    js['retrieved'] = "NOW()"
 	    if "location" in js:
 		js["location"] = json.dumps(js["location"])
 	    for a in ["name", "description", "location", "icon", "picture", "products", "website", "founded", "company_overview", "mission"]:
@@ -236,6 +243,7 @@ if __name__ == "__main__":
 		    print "Cannot update"
 		    print js
 	if fbobjtype == "group" or fbobjtype == "event":
+	    js['retrieved'] = "NOW()"
     	    for x in ["name", "description", "location", "icon", "picture"]:
 		if x in js and js[x] is not None:
 		    js[x] = js[x].encode("utf8")
@@ -245,29 +253,102 @@ if __name__ == "__main__":
 		js["owner"] = js["owner"]["id"]
 	    table_name = str("facebook_%ss" % fbobjtype)
 	    try:
-		pgconn.update(table_name, js)
+		pgconn.insert(table_name, js)
+		if showheader:
+		    print str(js["id"]) + "\t" + js["name"]
 	    except pg.ProgrammingError:
-		pgconn.update(table_name, js)
-	if fbobjtype == "group" and (fbconntype == "members" or allfields):
+		try:
+		    if allowUpdate:
+			print "Cannot insert, will update instead"
+			pgconn.update(table_name, js)
+		except pg.ProgrammingError:
+		    print "Cannot update"
+		    print js
+	if (fbobjtype == "group" and (fbconntype == "members" or allfields)) or (fbobjtype == "event" and (fbconntype == "attending" or allfields)):
 	    d = datetime.datetime.now()
-	    if fbconntype is None and allfields:
-		members = js["members"]["data"]
+	    if allfields:
+		if fbobjtype == "group":
+		    members = js["members"]["data"]
+		elif fbobjtype == "event":
+		    members = list()
+		    if "invited" in js:
+			members += js["invited"]["data"]
+		    if "attending" in js:
+			members += js["attending"]["data"]
+		    if "declined" in js:
+			members += js["declined"]["data"]
+		    if "noreply" in js:
+			members += js["noreply"]["data"]
+		    if "maybe" in js:
+			members += js["maybe"]["data"]
 	    else:
 		members = js["data"]
+	    print "len(members): " + len(members)
 	    for x in members:
 		x["name"] = x["name"].encode("utf8")
 		try:
 		    pgconn.insert("facebook_users", x)
-		except pg.ProgrammingError, ValueError:
+		    if showheader:
+			print str(x["id"]) + "\t" + x["name"]
+		except pg.ProgrammingError:
 		    try:
-			pgconn.update("facebook_users", x)
+			if allowUpdate:
+			    print "Cannot insert, will update instead"
+			    pgconn.update("facebook_users", x)
 		    except pg.ProgrammingError:
 			print "Cannot update"
-		try:
-	    	    pgconn.insert("facebook_users_groups", {"uid":long(x["id"]),"gid":long(fbid)})
-		except pg.ProgrammingError:
-		    pass
+		if fbobjtype == "group":
+		    try:
+			pgconn.insert("facebook_users_groups", {"uid":long(x["id"]),"gid":long(fbid)})
+			if showheader:
+			    print "members: " + str(x["id"]) + "\t" + str(fbid)
+		    except pg.ProgrammingError:
+			pass
+		elif fbobjtype == "event":
+		    if "rsvp_status" in x:
+			try:
+			    pgconn.insert("facebook_users_events", {"uid":long(x["id"]),"eid":long(fbid),"rsvp_status":x["rsvp_status"], "retrieved": "NOW()"})
+			except pg.ProgrammingError:
+			    pgconn.update("facebook_users_events", {"uid":long(x["id"]),"eid":long(fbid),"rsvp_status":x["rsvp_status"], "retrieved": "NOW()"})
+			if showheader:
+			    print "event: " + str(x["id"]) + "\t" + str(fbid) + "\t" + x["rsvp_status"]
+		    else:
+			pgconn.insert("facebook_users_events", {"uid":long(x["id"]),"eid":long(fbid), "retrieved": "NOW()"})
+			if showheader:
+			    print "event: " + str(x["id"]) + "\t" + str(fbid)
 		#print x
+	if ",feed," in fields and "feed" in js:
+	    if allfields:
+		feed = js["feed"]["data"]
+	    elif fbconntype == "feed":
+		feed = js["data"]
+	    for x in feed:
+		x['retrieved'] = "NOW()"
+		for a in ["name", "description", "location", "icon", "picture", "caption", "message", "link"]:
+		    if a in x and x[a] is not None:
+			x[a] = x[a].encode("utf8")
+		if "from" in x:
+		    x["from"] = x["from"]["id"]
+		if "to" in x:
+		    x["to"] = x["to"]["data"][0]["id"]
+		if "properties" in x:
+		    x["properties"] = json.dumps(x["properties"]).encode("utf8")
+		if "comments" in x:
+		    x["comments"] = json.dumps(x["comments"]).encode("utf8")
+		if "comments" in x:
+		    x["comments_count"] = len(x["comments"])
+		try:
+		    pgconn.insert("facebook_posts", x)
+		    print x["id"]
+		except pg.ProgrammingError:
+		    try:
+			if allowUpdate:
+			    print "Cannot insert, will update instead"
+			    pgconn.update("facebook_posts", x)
+			#print "duplicate: " + x["id"]
+		    except pg.ProgrammingError:
+			print "Cannot update"
+			print x
     else:
 	print js
 
