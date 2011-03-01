@@ -1,7 +1,7 @@
-twitter.oauth.py and facebook.oauth.py perform various pull operations from Twitter and Facebook. Must replace hardcoded values of token and secret keys with your own. Usage information is generally available when running the script.
+twitter.oauth.py and facebook.oauth.py perform various pull operations from Twitter and Facebook. The OAuth token and secret, Facebook ID, should be in your version of mypass.py. Usage information is generally available when running the script. facebook.search.py is used for searching (a way of discovering new contents by keyword search).
 
 twitter_pull.sql and facebook_pull.sql should create the postgresql databases needed to store the data of these aforementioned scripts.
 
-I made tools for Sina Weibo as well.
+We also have tools for Sina Weibo, the most popular Chinese microblogging system. The API is more easily accessible with cURL, so I wrote a wrapper script for cURL in BASH shell (sinagetter.sh), and a Python script that interfaces with the database (sinastorage.py).
 
-These scripts are developed under Linux (Ubuntu 10.04). I used Python 2.6.5 and my Postgresql is 8.3.
+These scripts are developed under Linux (Ubuntu Lucid 10.04). I used Python 2.6.5 and my version of Postgresql is 8.3 (with Postgis 1.5).
