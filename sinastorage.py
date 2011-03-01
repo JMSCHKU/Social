@@ -66,16 +66,17 @@ js = simplejson.loads(content)
 r = dict()
 
 # in case of error, exit
-if content != "[]" and "error" in js[0]:
-    print js[0]["error"]
-    if js[0]["error"].startswith("40302"):
+if content != "[]" and len(js) > 0 and 0 in js:
+    if "error" in js[0]:
+	print js[0]["error"]
+	if js[0]["error"].startswith("40302"):
+	    sys.exit()
+	if js[0]["error"].startswith("40023"):
+	    sys.exit()
+	if js[0]["error"].startswith("40031"):
+	    sys.exit()
+	time.sleep(sleeptime)
 	sys.exit()
-    if js[0]["error"].startswith("40023"):
-	sys.exit()
-    if js[0]["error"].startswith("40031"):
-	sys.exit()
-    time.sleep(sleeptime)
-    sys.exit()
 
 if opt == 1:
     if not isinstance(js, types.ListType):
@@ -87,9 +88,7 @@ if opt == 1:
 	l = js[j]
 	last_tweet = l
 	row = None
-	#if l["in_reply_to_user_id"] is not None and type(l["in_reply_to_user_id"]) is types.StringType and len(l["in_reply_to_user_id"]) == 2:
-	#    l["in_reply_to_user_id"] = None
-	for a in ["text", "source", "thumbnail_pic", "bmiddle_pic", "original_pic"]:
+	for a in ["text", "source", "location", "thumbnail_pic", "bmiddle_pic", "original_pic", "screen_name", "in_reply_to_screen_name"]:
 	    if a in l and l[a] is not None:
 		l[a] = l[a].encode("utf8")
 	if "retweeted_status" in l and l["retweeted_status"] is not None:
@@ -98,12 +97,12 @@ if opt == 1:
 	    if justretweets:
 		continue
 	if "user" in l:
-	    if l["user"]["name"] is not None:
-		l["screen_name"] = l["user"]["name"].encode("utf8")
-	    elif l["user"]["screen_name"] is not None:
+	    if l["user"]["screen_name"] is not None:
 		l["screen_name"] = l["user"]["screen_name"].encode("utf8")
+	    elif l["user"]["name"] is not None:
+		l["screen_name"] = l["user"]["name"].encode("utf8")
 	    elif l["user"]["domain"] is not None:
-		l["screen_name"] = l["user"]["domain"]
+		l["screen_name"] = l["user"]["domain"].encode("utf8")
 	    else:
 		l["screen_name"] = None
 	else:
@@ -118,10 +117,12 @@ if opt == 1:
 		    row = pgconn.update(table_name, l)
 		    print "updating..."
 		    print row
+		else:
+		    pass
 	    except:
 		print "can't insert or update"
 		print last_tweet
-	    #pass
+		pass
 	if row is not None and l["geo"] is not None:
 	    if "type" in l["geo"] and l["geo"]["type"] == "Point" and "coordinates" in l["geo"] and l["geo"]["coordinates"] is not None and len(l["geo"]["coordinates"]) == 2:
 		lat = l["geo"]["coordinates"][0]
@@ -167,16 +168,6 @@ elif opt == 2:
 	for a in ["name", "screen_name", "location", "description", "profile_image_url", "url"]:
 	    if a in l and l[a] is not None:
 		l[a] = l[a].encode("utf8")
-	'''
-    	r = {"id": l["id"], "name": l["name"].encode("utf8"), "screen_name": l["screen_name"].encode("utf8"),\
-	"province": l["province"], "city": l["city"],"location": l["location"].encode("utf8"),\
-	"description": l["description"].encode("utf8"), "profile_image_url": l["profile_image_url"].encode("utf8"),\
-	"url": l["url"].encode("utf8"),"domain": l["domain"], "gender": l["gender"], "followers_count": l["followers_count"],\
-	"friends_count": l["friends_count"],"created_at": l["created_at"], "favourites_count": l["favourites_count"],\
-	"allow_all_act_msg": l["allow_all_act_msg"],"geo_enabled": l["geo_enabled"],
-	"verified": l["verified"], "statuses_count": l["statuses_count"],
-	"retrieved": "NOW()"}
-	'''
 	try:
 	    pgconn.insert(table_name, l)
 	except pg.ProgrammingError, pg.InternalError:
@@ -185,9 +176,11 @@ elif opt == 2:
 		if doupdate:
 		    print "trying to update instead"
 		    pgconn.update(table_name, l)
+		else:
+		    print l
 	    except:
 		print "an error has occurred (row cannot be updated)"
-	    print l
+		print l
 elif opt == 3 or opt == 4:
     if opt == 3:
 	table_name += "_friends"
@@ -247,8 +240,10 @@ elif opt == 8:
 		    if doupdate:
 			print "user: trying to update instead"
 			pgconn.update("sinaweibo_users", u)
+		    else:
+			print u
 		except:
 		    print "user: an error has occurred (row cannot be updated)"
-		print u
+		    print u
 
 f.close()
