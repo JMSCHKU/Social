@@ -43,7 +43,7 @@ WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": 
     missing_users = list()
     missing_users_ids = list()
     for r in rows:
-	m = re.findall("//@([^: ]*)", r["text"])
+	m = re.findall("//@([^:/@ ]*)", r["text"])
 	refs = list()
 	for refname in m:
 	    ref = dict()
@@ -63,7 +63,7 @@ WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": 
 	    refs.append(ref)
 	    count += 1
 	r["references"] = refs
-	if get_users and r["user_id_ref"] is None:
+	if get_users and r["user_id_ref"] is None: # users who reposted, but not in our DB yet
 	    missing_users_ids.append(r["user_id"])
 	rts.append(r)
     out["missing_users"] = missing_users
@@ -88,7 +88,7 @@ WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": 
     else:
 	return out
 
-def gviz_trends(tid, req_id=0, interval="", period="", province=0, outformat="json"):
+def gviz_trends(tid, req_id=0, interval="", period="", province=0, listid=0, outformat="json"):
     try:
 	tid = long(tid)
     except ValueError:
@@ -137,10 +137,16 @@ INTERVAL '%(mins_interval)s min' * ROUND(date_part('minute', s.created_at) \
 	basetime = datetime.datetime.combine(basetime, datetime.time())
 	sql_period = " AND s.created_at >= '%s' " % basetime.strftime("%Y-%m-%d")
     sql_location = ""
-    if province > 0:
-	sql_location = " AND u.province = %d " % province
-    sql = "SELECT %(interval)s AS time, COUNT(*) AS count, COUNT(DISTINCT user_id) AS users \
-FROM sinaweibo s LEFT JOIN sinaweibo_users u ON s.user_id = u.id WHERE retweeted_status = %(tid)d %(sql_period)s %(sql_location)s GROUP BY time ORDER BY time " % {"tid": tid, "interval": sql_interval, "sql_period": sql_period, "sql_location": sql_location}
+    sql_listidjoin = ""
+    sql_listid = ""
+    if int(listid) > 0:
+	sql_listidjoin = "LEFT JOIN sinaweibo_userlist ul ON u.id = ul.user_id "
+	sql_listid = " AND ul.list_id = %d " % int(listid)
+    if int(province) > 0:
+	sql_location = " AND u.province = %d " % int(province)
+    sql = "SELECT %(interval)s AS time, COUNT(*) AS count, COUNT(DISTINCT s.user_id) AS users \
+FROM sinaweibo s LEFT JOIN sinaweibo_users u ON s.user_id = u.id %(sql_listidjoin)s WHERE retweeted_status = %(tid)d %(sql_period)s %(sql_location)s %(sql_listid)s GROUP BY time ORDER BY time " \
+% {"tid": tid, "interval": sql_interval, "sql_period": sql_period, "sql_location": sql_location, "sql_listidjoin": sql_listidjoin, "sql_listid": sql_listid}
     rows = pgconn.query(sql).dictresult()
     description = {"time": ("string", "Time"),
 		    "count": ("number", "statuses"),

@@ -21,7 +21,7 @@ if [ $# -gt 1 ]
 then
     MAXP=$2
 else
-    MAXP=200
+    MAXP=1000
 fi
 
 if [ $# -gt 2 ]
@@ -43,7 +43,7 @@ ${HOME}/bin/sinastorage.py 1 ${FI}
 # go through multiple pages
 for i in `seq ${STAP} ${MAXP}`
 do
-    echo ${POSTID}
+    #echo ${POSTID}
     CHECK1=999
     CHECK2=2
     COUNT=0
@@ -66,7 +66,6 @@ do
 	break
     fi
     # count the consecutive "[]", then stop if too many of them
-    echo ${CHECK1} ${CHECK2}
     if [ ${CHECK1} -eq 0 ] && [ ${CHECK2} -gt 2 ]
     then
 	CONSEQ_BLANKS=0
@@ -80,5 +79,6 @@ do
 	continue
     fi
     ${HOME}/bin/sinastorage.py 1 ${FI}
+    echo ${i} ${CHECK1} ${CHECK2}
     rm ${FI}
 done

@@ -18,9 +18,12 @@ usage = "sinamostretweeted.py [date start] [optional: date end] [-o filename]"
 # default values
 fformat = "json"
 provid = 81
+listid = 0
 outfile = ""
 nouser = False
 counting = False
+maxfollowers_default = 100000
+maxfollowers = 0
 
 if len(sys.argv) > 2 and not sys.argv[2].startswith("-"):
     dateend = sys.argv[2]
@@ -71,19 +74,53 @@ for i in range(2,len(sys.argv)):
 		provid = int(sys.argv[i+1])
 	    except:
 		continue
+    if sys.argv[i] == "-maxfol" or sys.argv[i] == "--max-followers":
+	if i + 1 < len(sys.argv):
+	    try:
+		maxfollowers = int(sys.argv[i+1])
+	    except:
+		maxfollowers = maxfollowers_default
+		continue
+	else:
+	    maxfollowers = maxfollowers_default
     if sys.argv[i] == "-no" or sys.argv[i] == "--no-userinfo":
 	nouser = True
+    if sys.argv[i] == "-l" or sys.argv[i] == "--listid":
+	if i + 1 < len(sys.argv):
+	    try:
+		listid = int(sys.argv[i+1])
+	    except:
+		continue
 
+
+if maxfollowers > 0:
+    maxfollowers_sql = "AND ru.followers_count < " + str(maxfollowers)
+else:
+    maxfollowers_sql = ""
 
 sql = "SELECT s.retweeted_status, COUNT(s.retweeted_status) AS retweeted_count, \
 ARRAY_AGG(s.user_id), ARRAY_AGG(s.created_at), ARRAY_AGG(u.gender), ARRAY_AGG(u.followers_count), \
 MAX(rs.id) AS id \
 FROM sinaweibo_users AS u RIGHT JOIN sinaweibo s on u.id = s.user_id \
-LEFT JOIN sinaweibo as rs ON s.retweeted_status = rs.id \
-WHERE u.province = %(provid)d AND s.created_at >= '%(date)s' %(dateend)s \
+LEFT JOIN sinaweibo AS rs ON s.retweeted_status = rs.id \
+LEFT JOIN sinaweibo_users AS ru ON rs.user_id = ru.id "
+
+if listid <= 0:
+    sql_where = "WHERE u.province = %(provid)d %(maxfollowers)s \
+AND s.created_at >= '%(date)s' %(dateend)s \
 AND s.retweeted_status IS NOT NULL \
 GROUP BY s.retweeted_status ORDER BY retweeted_count DESC "\
-% { 'provid': provid, 'date': datetime.datetime.strftime(datestart, '%Y-%m-%d'), 'dateend': dateend_sql }
+% { 'provid': provid, 'date': datetime.datetime.strftime(datestart, '%Y-%m-%d'), \
+'dateend': dateend_sql, 'maxfollowers': maxfollowers_sql }
+else:
+    sql_where = "LEFT JOIN sinaweibo_userlist ul ON u.id = ul.user_id \
+WHERE ul.list_id = %(listid)d AND s.created_at >= '%(date)s' %(dateend)s \
+AND s.retweeted_status IS NOT NULL \
+GROUP BY s.retweeted_status ORDER BY retweeted_count DESC "\
+% { 'listid': listid, 'date': datetime.datetime.strftime(datestart, '%Y-%m-%d'), \
+'dateend': dateend_sql, 'maxfollowers': maxfollowers_sql }
+
+sql += sql_where
 
 if counting:
     print "Counting rows..."
