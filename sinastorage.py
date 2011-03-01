@@ -18,6 +18,9 @@ table_name = "sinaweibo"
 
 pgconn = mypass.getConn()
 
+tobeginning = True
+last_one = ""
+insert_user = False
 doupdate = False
 justretweets = False
 sleeptime = 300
@@ -48,11 +51,31 @@ elif opt <= 2:
 	    justretweets = True
 	if sys.argv[i] == "-s" or sys.argv[i] == "--from-statuses":
 	    fromstatuses = True
+elif opt == 8:
+    for i in range(3,len(sys.argv)):
+	if sys.argv[i] == "-b" or sys.argv[i] == "--to-beginning":
+	    tobeginning = True
+	if sys.argv[i] == "-nd" or sys.argv[i] == "--no-duplicates":
+	    tobeginning = False
+	if sys.argv[i] == "-U" or sys.argv[i] == "--user":
+	    insert_user = True
 
 f = open(fname, "r")
 content = f.read()
 js = simplejson.loads(content)
 r = dict()
+
+# in case of error, exit
+if content != "[]" and "error" in js[0]:
+    print js[0]["error"]
+    if js[0]["error"].startswith("40302"):
+	sys.exit()
+    if js[0]["error"].startswith("40023"):
+	sys.exit()
+    if js[0]["error"].startswith("40031"):
+	sys.exit()
+    time.sleep(sleeptime)
+    sys.exit()
 
 if opt == 1:
     if not isinstance(js, types.ListType):
@@ -60,51 +83,39 @@ if opt == 1:
     if len(js) <= 0:
 	print js
 	sys.exit()
-    if "error" in js[0]:
-	print js[0]["error"]
-	if js[0]["error"].startswith("40302"):
-	    sys.exit()
-	if js[0]["error"].startswith("40023"):
-	    sys.exit()
-	time.sleep(sleeptime)
-	sys.exit()
     for j in range(len(js)):
 	l = js[j]
 	last_tweet = l
 	row = None
-	keys = l.keys()
 	#if l["in_reply_to_user_id"] is not None and type(l["in_reply_to_user_id"]) is types.StringType and len(l["in_reply_to_user_id"]) == 2:
 	#    l["in_reply_to_user_id"] = None
-	r = {"id": l["id"], "created_at": l["created_at"], "text": l["text"].encode("utf8"), "in_reply_to_user_id": l["in_reply_to_user_id"],\
-	    "in_reply_to_status_id": l["in_reply_to_status_id"], "source": l["source"].encode("utf8")}
-	if "retweeted_status" in keys and l["retweeted_status"] is not None:
-	    r["retweeted_status"] = l["retweeted_status"]["id"]
+	for a in ["text", "source", "thumbnail_pic", "bmiddle_pic", "original_pic"]:
+	    if a in l and l[a] is not None:
+		l[a] = l[a].encode("utf8")
+	if "retweeted_status" in l and l["retweeted_status"] is not None:
+	    l["retweeted_status"] = l["retweeted_status"]["id"]
 	else:
 	    if justretweets:
 		continue
 	if "user" in l:
-	    if l["user"]["domain"] is not None:
-		r["screen_name"] = l["user"]["domain"]
+	    if l["user"]["name"] is not None:
+		l["screen_name"] = l["user"]["name"].encode("utf8")
 	    elif l["user"]["screen_name"] is not None:
-		r["screen_name"] = l["user"]["screen_name"].encode("utf8")
+		l["screen_name"] = l["user"]["screen_name"].encode("utf8")
+	    elif l["user"]["domain"] is not None:
+		l["screen_name"] = l["user"]["domain"]
 	    else:
-		r["screen_name"] = None
+		l["screen_name"] = None
 	else:
-	    r["screen_name"] = None
+	    l["screen_name"] = None
 	if l["user"] is not None:
-	    r["user_id"] = l["user"]["id"]
-	if "thumbnail_pic" in keys:
-	    r["thumbnail_pic"] = l["thumbnail_pic"].encode("utf8")
-	if "bmiddle_pic" in keys:
-	    r["bmiddle_pic"] = l["bmiddle_pic"].encode("utf8")
-	if "original_pic" in keys:
-	    r["original_pic"] = l["original_pic"].encode("utf8")
+	    l["user_id"] = l["user"]["id"]
 	try:
-	    row = pgconn.insert(table_name, r)
+	    row = pgconn.insert(table_name, l)
 	except pg.ProgrammingError, pg.InternalError:
 	    try:
 		if doupdate:
-		    row = pgconn.update(table_name, r)
+		    row = pgconn.update(table_name, l)
 		    print "updating..."
 		    print row
 	    except:
@@ -125,6 +136,23 @@ if opt == 1:
 	    #print last_tweet
 	    #print "tweets up to date (duplicate found in DB)"
 	    #break
+	# try to add the user
+	if insert_user and "user" in l:
+	    u = l["user"]
+	    u["retrieved"] = "NOW()"
+	    for a in ["name", "screen_name", "location", "description", "profile_image_url", "url"]:
+		if a in u and u[a] is not None:
+		    u[a] = u[a].encode("utf8")
+	    try:
+		pgconn.insert("sinaweibo_users", u)
+	    except pg.ProgrammingError, pg.InternalError:
+		try:
+		    if doupdate:
+			print "user: trying to update instead"
+			pgconn.update("sinaweibo_users", u)
+		except:
+		    print "user: an error has occurred (row cannot be updated)"
+		print u
 elif opt == 2:
     table_name += "_users"
     if not isinstance(js, types.ListType):
@@ -132,17 +160,14 @@ elif opt == 2:
     if len(js) <= 0:
 	print js
 	sys.exit()
-    if "error" in js[0]:
-	print js[0]["error"]
-	if js[0]["error"].startswith("40302"):
-	    sys.exit()
-	if js[0]["error"].startswith("40023"):
-	    sys.exit()
-	time.sleep(sleeptime)
-	sys.exit()
     for l in js:
+	l["retrieved"] = "NOW()"
 	if fromstatuses and "user" in l:
 	    l = l["user"]
+	for a in ["name", "screen_name", "location", "description", "profile_image_url", "url"]:
+	    if a in l and l[a] is not None:
+		l[a] = l[a].encode("utf8")
+	'''
     	r = {"id": l["id"], "name": l["name"].encode("utf8"), "screen_name": l["screen_name"].encode("utf8"),\
 	"province": l["province"], "city": l["city"],"location": l["location"].encode("utf8"),\
 	"description": l["description"].encode("utf8"), "profile_image_url": l["profile_image_url"].encode("utf8"),\
@@ -151,17 +176,18 @@ elif opt == 2:
 	"allow_all_act_msg": l["allow_all_act_msg"],"geo_enabled": l["geo_enabled"],
 	"verified": l["verified"], "statuses_count": l["statuses_count"],
 	"retrieved": "NOW()"}
+	'''
 	try:
-	    pgconn.insert(table_name, r)
+	    pgconn.insert(table_name, l)
 	except pg.ProgrammingError, pg.InternalError:
 	    print "user duplicate found in DB..."
 	    try:
 		if doupdate:
 		    print "trying to update instead"
-		    pgconn.update(table_name, r)
+		    pgconn.update(table_name, l)
 	    except:
 		print "an error has occurred (row cannot be updated)"
-	    print r
+	    print l
 elif opt == 3 or opt == 4:
     if opt == 3:
 	table_name += "_friends"
@@ -180,5 +206,49 @@ elif opt == 3 or opt == 4:
 	    except:
 		print r
 		print "duplicate and cannot update"
+elif opt == 8:
+    table_name += "_comments"
+    for x in js:
+	last_one = x
+	for a in ["text"]:
+    	    if a in x and x[a] is not None:
+		x[a] = x[a].encode("utf8")
+	if "user" in x:
+	    x["user_id"] = x["user"]["id"]
+	else:
+	    u = None
+	if "status" in x:
+	    x["status_id"] = x["status"]["id"]
+	try:
+	    pgconn.insert(table_name, x)
+	except pg.ProgrammingError, pg.InternalError:
+	    if not tobeginning:
+		print last_one
+	       	print "UP-TO-DATE: comments up to date (duplicate found in DB)"
+		break
+	    try:
+		if doupdate:
+		    print "trying to update instead"
+		    pgconn.update(table_name, x)
+	    except:
+		print "an error has occurred (row cannot be updated)"
+	    print x
+	# try to add the user
+	if insert_user and "user" in x:
+	    u = x["user"]
+	    u["retrieved"] = "NOW()"
+	    for a in ["name", "screen_name", "location", "description", "profile_image_url", "url"]:
+		if a in u and u[a] is not None:
+		    u[a] = u[a].encode("utf8")
+	    try:
+		pgconn.insert("sinaweibo_users", u)
+	    except pg.ProgrammingError, pg.InternalError:
+		try:
+		    if doupdate:
+			print "user: trying to update instead"
+			pgconn.update("sinaweibo_users", u)
+		except:
+		    print "user: an error has occurred (row cannot be updated)"
+		print u
 
 f.close()
