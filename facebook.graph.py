@@ -57,13 +57,16 @@ if __name__ == "__main__":
     fbobjtype = None
     fbconntype = None
     allowUpdate = False
+    quiet = False
+    watch = False
+    is_new_insert = False
 
     if len(sys.argv) > 1:
 	if sys.argv[1] == "?" or sys.argv[1] == "--help":
 	    print helptxt
 	    sys.exit()
 	try:
-	    fbid = int(sys.argv[1])
+	    fbid = long(sys.argv[1])
 	except ValueError: # fall back to unique name
 	    fbid = 0
 	    fbname = sys.argv[1]
@@ -93,6 +96,10 @@ if __name__ == "__main__":
 		database = True
 	    if sys.argv[i] == "-a" or sys.argv[i] == "--all-fields":
 		allfields = True
+	    if sys.argv[i] == "-q" or sys.argv[i] == "--quiet":
+		quiet = True
+	    if sys.argv[i] == "-w" or sys.argv[i] == "--watch":
+		watch = True
 	    if sys.argv[i] == "-t":
 		if i+1<len(sys.argv):
 		    fbobjtype = sys.argv[i+1]
@@ -202,7 +209,8 @@ if __name__ == "__main__":
 		    if allowUpdate:
 			pgconn.update("facebook_users", js)
 		except pg.ProgrammingError:
-		    print "Cannot update"
+		    if not quiet:
+			print "Cannot update"
 		    print js
 	if fbobjtype == "page":
 	    js['retrieved'] = "NOW()"
@@ -213,13 +221,20 @@ if __name__ == "__main__":
 		    js[a] = js[a].encode("utf8")
 	    if "fan_count" in js:
 		js["likes"] = js["fan_count"]
+	    else:
+		js["fan_count"] = 0
+	    if "likes" in js:
+		js["fan_count"] = js["likes"]
 	    table_name = str("facebook_%ss" % fbobjtype)
 	    try:
 		pgconn.insert(table_name, js)
+		if watch:
+		    pgconn.insert(table_name + "_watch", {"pid": js["id"], "retrieved": "NOW()", "fan_count": js["fan_count"]})
 	    except pg.ProgrammingError:
 		try:
 		    if allowUpdate:
-			print "Cannot insert, will update instead"
+			if not quiet:
+			    print "Cannot insert, will update instead"
 			pgconn.update(table_name, js)
 		except pg.ProgrammingError:
 		    print "Cannot update"
@@ -236,17 +251,23 @@ if __name__ == "__main__":
 	    except pg.ProgrammingError:
 		try:
 		    if allowUpdate:
-			print "Cannot insert, will update instead"
+			if not quiet:
+			    print "Cannot insert, will update instead"
 			pgconn.update(table_name, js)
 		    #print "duplicate: " + js["id"]
 		except pg.ProgrammingError:
-		    print "Cannot update"
+		    if not quiet:
+			print "Cannot update"
 		    print js
 	if fbobjtype == "group" or fbobjtype == "event":
 	    js['retrieved'] = "NOW()"
-    	    for x in ["name", "description", "location", "icon", "picture"]:
+    	    for x in ["name", "description", "location", "icon", "picture", "link"]:
 		if x in js and js[x] is not None:
 		    js[x] = js[x].encode("utf8")
+	    if "members" in js:
+		sql_members = "SELECT COUNT(*) AS members_count FROM facebook_groups g LEFT JOIN facebook_users_groups ug ON g.id = ug.gid WHERE g.id = %d " % fbid
+		res_members = pgconn.query(sql_members).getresult()
+		js["members_count"] = res_members[0][0]
 	    if "venue" in js:
 		js["venue"] = json.dumps(js["venue"]).encode("utf8")
 	    if "owner" in js:
@@ -256,13 +277,16 @@ if __name__ == "__main__":
 		pgconn.insert(table_name, js)
 		if showheader:
 		    print str(js["id"]) + "\t" + js["name"]
+		is_new_insert = True
 	    except pg.ProgrammingError:
 		try:
 		    if allowUpdate:
-			print "Cannot insert, will update instead"
+			if not quiet:
+			    print "Cannot insert, will update instead"
 			pgconn.update(table_name, js)
 		except pg.ProgrammingError:
-		    print "Cannot update"
+		    if not quiet:
+			print "Cannot update"
 		    print js
 	if (fbobjtype == "group" and (fbconntype == "members" or allfields)) or (fbobjtype == "event" and (fbconntype == "attending" or allfields)):
 	    d = datetime.datetime.now()
@@ -283,7 +307,7 @@ if __name__ == "__main__":
 			members += js["maybe"]["data"]
 	    else:
 		members = js["data"]
-	    print "len(members): " + len(members)
+	    print "len(members): " + str(len(members))
 	    for x in members:
 		x["name"] = x["name"].encode("utf8")
 		try:
@@ -293,10 +317,12 @@ if __name__ == "__main__":
 		except pg.ProgrammingError:
 		    try:
 			if allowUpdate:
-			    print "Cannot insert, will update instead"
+			    if not quiet:
+				print "Cannot insert, will update instead"
 			    pgconn.update("facebook_users", x)
 		    except pg.ProgrammingError:
-			print "Cannot update"
+			if not quiet:
+			    print "Cannot update"
 		if fbobjtype == "group":
 		    try:
 			pgconn.insert("facebook_users_groups", {"uid":long(x["id"]),"gid":long(fbid)})
@@ -317,6 +343,26 @@ if __name__ == "__main__":
 			if showheader:
 			    print "event: " + str(x["id"]) + "\t" + str(fbid)
 		#print x
+	    if watch and is_new_insert:
+		if pgobtype == "group":
+		    pgconn.query("INSERT INTO facebook_groups_watch (gid, members_count, retrieved) SELECT %(gid)d, COUNT(*), NOW() FROM facebook_users_groups WHERE gid = %(gid)d GROUP BY gid " % {"gid": long(fbid)})
+		elif pgobjtype == "event":
+		    sql_event_watch = "SELECT rsvp_status, COUNT(*) as count FROM facebook_users_events WHERE eid = %(eid)d GROUP BY rsvp_status ORDER BY rsvp_status " % {"eid": long(fbid)}
+		    resew = pgconn.query(sql_event_watch).dictresult()
+		    ew_attending = ew_declined = ew_not_replied = ew_unsure = 0
+		    for x in resew:
+			if x["rsvp_status"] == "attending":
+			    ew_attending = x["count"]
+			elif x["rsvp_status"] == "declined":
+			    ew_declined = x["count"]
+			elif x["rsvp_status"] == "not_replied":
+			    ew_not_replied = x["count"]
+			elif x["rsvp_status"] == "unsure":
+			    ew_unsure = x["count"]
+		    #sql_event_watch_ins = "INSERT INTO facebook_events_watch (eid, attending_count, declined_count, notreplied_count, unsure_count, retrieved) VALUES (%(eid)d, %(attending)d, %(declined)d, %(not_replied)d, %(unsure)d, NOW()) " \
+		    #% {"attending": ew_attending, "declined": ew_declined, "not_replied": ew_not_replied, "unsure": ew_unsure}
+		    #pgconn.query(sql_event_watch_ins)
+		    pgconn.insert("facebook_events_watch", {"eid": long(fbid), "attending_count": ew_attending, "declined_count": ew_declined, "notreplied_count": ew_not_replied, "unsure_count": ew_unsure, "retrieved": "NOW()"})
 	if ",feed," in fields and "feed" in js:
 	    if allfields:
 		feed = js["feed"]["data"]
@@ -343,11 +389,13 @@ if __name__ == "__main__":
 		except pg.ProgrammingError:
 		    try:
 			if allowUpdate:
-			    print "Cannot insert, will update instead"
+			    if not quiet:
+				print "Cannot insert, will update instead"
 			    pgconn.update("facebook_posts", x)
 			#print "duplicate: " + x["id"]
 		    except pg.ProgrammingError:
-			print "Cannot update"
+			if not quiet:
+			    print "Cannot update"
 			print x
     else:
 	print js

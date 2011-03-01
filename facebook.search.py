@@ -34,6 +34,7 @@ if __name__ == "__main__":
     allfields = False
     allowUpdate = False
     limit = MAX_LIMIT
+    watch = False
     if len(sys.argv) > 2:
 	fbobjtype = sys.argv[1]
 	for i in range(2, len(sys.argv)):
@@ -63,6 +64,8 @@ if __name__ == "__main__":
 		database = True
 	    if sys.argv[j] == "-a" or sys.argv[j] == "--all-fields":
 		allfields = True
+	    if sys.argv[i] == "-w" or sys.argv[i] == "--watch":
+		watch = True
 	    if sys.argv[j] == "-l":
 		if j+1<len(sys.argv):
 		    limit = int(sys.argv[j+1])
@@ -221,6 +224,11 @@ if __name__ == "__main__":
 		try:
 		    pgconn.insert(table_name, x)
 		    print str(str(x["id"]) + "\t" + x["name"])
+		    if watch:
+			if fbobjtype == "group":
+			    pgconn.query("INSERT INTO facebook_groups_watch (gid, members_count, retrieved) SELECT %(gid)d, COUNT(*), NOW() FROM facebook_users_groups WHERE gid = %(gid)d GROUP BY gid " % {"gid": x["id"]})
+			elif fbobjtype == "page":
+			    pgconn.insert(table_name + "_watch", {"pid": x["id"], "retrieved": "NOW()", "fan_count": x["fan_count"]})
 		except pg.ProgrammingError:
 		    try:
 			if allowUpdate:
