@@ -19,11 +19,13 @@ table_name = "sinaweibo"
 pgconn = mypass.getConn()
 
 tobeginning = True
+tobeginning_grace = 190
 last_one = ""
 insert_user = False
 doupdate = False
 justretweets = False
-sleeptime = 300
+verbose = False
+sleeptime = 150
 
 if len(sys.argv) > 2:
     try:
@@ -45,13 +47,16 @@ if opt >= 3 and opt <= 4:
 elif opt <= 2:
     fromstatuses = False
     for i in range(3,len(sys.argv)):
+	if sys.argv[i] == "-v" or sys.argv[i] == "--verbose":
+	    verbose = True
 	if sys.argv[i] == "-u" or sys.argv[i] == "--update":
 	    doupdate = True
 	if sys.argv[i] == "-rt" or sys.argv[i] == "--retweets":
 	    justretweets = True
 	if sys.argv[i] == "-s" or sys.argv[i] == "--from-statuses":
 	    fromstatuses = True
-elif opt == 8:
+elif opt == 7 or opt == 8:
+    tobeginning = False
     for i in range(3,len(sys.argv)):
 	if sys.argv[i] == "-b" or sys.argv[i] == "--to-beginning":
 	    tobeginning = True
@@ -62,23 +67,35 @@ elif opt == 8:
 
 f = open(fname, "r")
 content = f.read()
-js = simplejson.loads(content)
+try:
+    js = simplejson.loads(content)
+except ValueError:
+    print "JSON ERROR: " + fname + "\t" + content
+    sys.exit()
 r = dict()
 
 # in case of error, exit
-if content != "[]" and len(js) > 0 and 0 in js:
-    if "error" in js[0]:
-	print js[0]["error"]
-	if js[0]["error"].startswith("40302"):
+if content != "[]" and ((len(js) > 0 and 0 in js) or "error" in js):
+    if len(js) > 0 and 0 in js and "error" in js[0]:
+	errorJs = js[0]["error"]
+    elif "error" in js:
+	errorJs = js["error"]
+    else:
+	errorJs = None
+    if errorJs is not None:
+	if verbose:
+	    print "FAILURE"
+	print errorJs
+	if errorJs.startswith("40302"):
 	    sys.exit()
-	if js[0]["error"].startswith("40023"):
+	if errorJs.startswith("40023"):
 	    sys.exit()
-	if js[0]["error"].startswith("40031"):
+	if errorJs.startswith("40031"):
 	    sys.exit()
 	time.sleep(sleeptime)
 	sys.exit()
 
-if opt == 1:
+if opt == 1 or opt == 7:
     if not isinstance(js, types.ListType):
 	js = [js]
     if len(js) <= 0:
@@ -107,11 +124,22 @@ if opt == 1:
 		l["screen_name"] = None
 	else:
 	    l["screen_name"] = None
-	if l["user"] is not None:
+	if "user" in l and l["user"] is not None:
 	    l["user_id"] = l["user"]["id"]
 	try:
 	    row = pgconn.insert(table_name, l)
 	except pg.ProgrammingError, pg.InternalError:
+	    tobeginning_grace_count = 0
+	    if not tobeginning:
+		tobeginning_grace_count += 1 # have a bit of loose in case the next comments page contains some of the previous in sinacomments.sh iteration
+		print "tobeginning_grace_count: " + str(tobeginning_grace_count)
+		if tobeginning_grace_count > tobeginning_grace:
+		    print last_one
+		    print "UP-TO-DATE: comments up to date (duplicate found in DB)"
+		    break
+		else:
+		    if not doupdate:
+			continue
 	    try:
 		if doupdate:
 		    row = pgconn.update(table_name, l)
@@ -170,6 +198,8 @@ elif opt == 2:
 		l[a] = l[a].encode("utf8")
 	try:
 	    pgconn.insert(table_name, l)
+	    if verbose:
+		print "SUCCESS"
 	except pg.ProgrammingError, pg.InternalError:
 	    print "user duplicate found in DB..."
 	    try:
@@ -201,6 +231,7 @@ elif opt == 3 or opt == 4:
 		print "duplicate and cannot update"
 elif opt == 8:
     table_name += "_comments"
+    tobeginning_grace_count = 0
     for x in js:
 	last_one = x
 	for a in ["text"]:
@@ -216,9 +247,15 @@ elif opt == 8:
 	    pgconn.insert(table_name, x)
 	except pg.ProgrammingError, pg.InternalError:
 	    if not tobeginning:
-		print last_one
-	       	print "UP-TO-DATE: comments up to date (duplicate found in DB)"
-		break
+		tobeginning_grace_count += 1 # have a bit of loose in case the next comments page contains some of the previous in sinacomments.sh iteration
+		print "tobeginning_grace_count: " + str(tobeginning_grace_count)
+		if tobeginning_grace_count > tobeginning_grace:
+		    print last_one
+		    print "UP-TO-DATE: comments up to date (duplicate found in DB)"
+		    break
+		else:
+		    if not doupdate:
+			continue
 	    try:
 		if doupdate:
 		    print "trying to update instead"

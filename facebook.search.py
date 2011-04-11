@@ -84,7 +84,7 @@ if __name__ == "__main__":
 	elif fbobjtype == "event":
 	    fields = "id,name,description,feed,attending,picture,venue,owner,privacy,updated_time,start_time,end_time,location"
 	elif fbobjtype == "page":
-	    fields = "id,name,category,feed,statuses,photos,picture,link,website,username,products,fan_count,founded,company_overview,mission"
+	    fields = "id,name,category,feed,statuses,photos,picture,link,website,username,products,likes,founded,company_overview,mission"
 	else:
 	    fields = "id,name,feed,members,noreply,maybe,invited,attending,declined,picture,docs" # grab-all fields
 	if fbobjtype != "user":
@@ -97,7 +97,7 @@ if __name__ == "__main__":
 	elif fbobjtype == "event":
 	    fields = "id,name,description,picture,updated_time,venue,location,start_time,end_time,privacy,owner"
 	elif fbobjtype == "page":
-	    fields = "id,name,description,picture,category,link,website,username,products,fan_count,founded,company_overview,mission"
+	    fields = "id,name,description,picture,category,link,website,username,products,likes,founded,company_overview,mission"
 	elif fbobjtype == "post":
 	    fields = "id,name,description,picture,message,link,caption,type,created_time,updated_time,properties,from,to,likes,comments,icon,source,privacy"
 	    limit = min(500, limit)
