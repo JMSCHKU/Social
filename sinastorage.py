@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# Not used anymore. Superseded by sinaweibo.oauth.py
+
 # sinastorage.py stores data retrieved using sinagetter.sh into a database (see sinaweibo.sql)
 
 import sys
@@ -18,14 +20,16 @@ table_name = "sinaweibo"
 
 pgconn = mypass.getConn()
 
-tobeginning = True
+tobeginning = False
 tobeginning_grace = 190
 last_one = ""
 insert_user = False
 doupdate = False
+doupdate_user = False
 justretweets = False
 verbose = False
 sleeptime = 150
+breakafterupdate = False
 
 if len(sys.argv) > 2:
     try:
@@ -47,16 +51,23 @@ if opt >= 3 and opt <= 4:
 elif opt <= 2:
     fromstatuses = False
     for i in range(3,len(sys.argv)):
+	if sys.argv[i] == "-b" or sys.argv[i] == "--to-beginning":
+	    tobeginning = True
 	if sys.argv[i] == "-v" or sys.argv[i] == "--verbose":
 	    verbose = True
+	if sys.argv[i] == "-q" or sys.argv[i] == "--quiet":
+	    verbose = False
 	if sys.argv[i] == "-u" or sys.argv[i] == "--update":
 	    doupdate = True
 	if sys.argv[i] == "-rt" or sys.argv[i] == "--retweets":
 	    justretweets = True
 	if sys.argv[i] == "-s" or sys.argv[i] == "--from-statuses":
 	    fromstatuses = True
+	if sys.argv[i] == "-U" or sys.argv[i] == "--user":
+	    insert_user = True
+	if sys.argv[i] == "-Uu" or sys.argv[i] == "--update-user":
+	    doupdate_user = True
 elif opt == 7 or opt == 8:
-    tobeginning = False
     for i in range(3,len(sys.argv)):
 	if sys.argv[i] == "-b" or sys.argv[i] == "--to-beginning":
 	    tobeginning = True
@@ -130,7 +141,7 @@ if opt == 1 or opt == 7:
 	    row = pgconn.insert(table_name, l)
 	except pg.ProgrammingError, pg.InternalError:
 	    tobeginning_grace_count = 0
-	    if not tobeginning:
+	    if not tobeginning and opt == 7:
 		tobeginning_grace_count += 1 # have a bit of loose in case the next comments page contains some of the previous in sinacomments.sh iteration
 		print "tobeginning_grace_count: " + str(tobeginning_grace_count)
 		if tobeginning_grace_count > tobeginning_grace:
@@ -140,6 +151,8 @@ if opt == 1 or opt == 7:
 		else:
 		    if not doupdate:
 			continue
+	    if not tobeginning and not doupdate:
+		breakafterupdate = True
 	    try:
 		if doupdate:
 		    row = pgconn.update(table_name, l)
@@ -166,7 +179,7 @@ if opt == 1 or opt == 7:
 	    #print "tweets up to date (duplicate found in DB)"
 	    #break
 	# try to add the user
-	if insert_user and "user" in l:
+	if (insert_user or doupdate_user) and "user" in l and (opt == 7 or (opt == 1 and j == 0)):
 	    u = l["user"]
 	    u["retrieved"] = "NOW()"
 	    for a in ["name", "screen_name", "location", "description", "profile_image_url", "url"]:
@@ -176,12 +189,22 @@ if opt == 1 or opt == 7:
 		pgconn.insert("sinaweibo_users", u)
 	    except pg.ProgrammingError, pg.InternalError:
 		try:
-		    if doupdate:
-			print "user: trying to update instead"
+		    if doupdate_user:
+			if verbose:
+			    print "user: trying to update instead"
 			pgconn.update("sinaweibo_users", u)
 		except:
 		    print "user: an error has occurred (row cannot be updated)"
-		print u
+		if verbose:
+		    print u
+	if (j == len(js) - 1 or breakafterupdate) and "user" in l:
+	    u = l["user"]
+	    sql = "UPDATE sinaweibo_users SET posts_updated = NOW() WHERE id = %(id)d " % { "id": u["id"] }
+	    pgconn.query(sql)
+	if breakafterupdate:
+	    if verbose:
+		print "up to date. breaking..."
+	    break
 elif opt == 2:
     table_name += "_users"
     if not isinstance(js, types.ListType):
@@ -199,7 +222,7 @@ elif opt == 2:
 	try:
 	    pgconn.insert(table_name, l)
 	    if verbose:
-		print "SUCCESS"
+		print "SUCCESS," + str(l["statuses_count"])
 	except pg.ProgrammingError, pg.InternalError:
 	    print "user duplicate found in DB..."
 	    try:
