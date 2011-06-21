@@ -18,7 +18,7 @@ import types
 MAXIMUM_TRIES = 50
 
 usage = "usage: twitter.oauth.py [1=mentions; 2=followers info by user_id, 3=single user info by screen_name,\
-4=all tweets by user_id, 5=all tweets by screen_name] [-d|--database||-c|--csv-out||-b|--to-beginning]"
+4=all tweets by user_id, 5=all tweets by screen_name] ID [-d|--database||-c|--csv-out||-b|--to-beginning]"
 
 pgconn = mypass.getConn()
 
@@ -30,6 +30,11 @@ todb = False
 tocsv = True
 tobeginning = False
 doupdate = False
+verbose = False
+
+if len(sys.argv) <= 1:
+    print usage
+    sys.exit()
 
 if len(sys.argv) > 1:
     try:
@@ -44,6 +49,8 @@ if len(sys.argv) > 2:
 	    user_id = int(sys.argv[2])
     	elif opt == 3 or opt == 5:
 	    screen_name = str(sys.argv[2])
+	elif opt == 6:
+	    tid = long(sys.argv[2])
     except ValueError:
 	print usage
 	sys.exit()
@@ -58,6 +65,8 @@ if len(sys.argv) > 2:
 	    tobeginning = True
 	if sys.argv[i] == "-u" or sys.argv[i] == "--update":
 	    doupdate = True
+	if sys.argv[i] == "-v" or sys.argv[i] == "--verbose":
+	    verbose = True
 try:
     if opt == 1:
 	url = "http://api.twitter.com/1/statuses/mentions.json?count=800&include_rts=true&include_entities=true"
@@ -71,9 +80,11 @@ try:
 	    print "duplicate has been found: this script will exit..."
 	    sys.exit()
     elif opt == 4:
-	url = "http://api.twitter.com/1/statuses/user_timeline.json?user_id=" + str(user_id) + "&count=200&trim_user=1&include_rts=1&include_entities=1"
+	url = "http://api.twitter.com/1/statuses/user_timeline.json?user_id=" + str(user_id) + "&count=200&trim_user=0&include_rts=1&include_entities=1"
     elif opt == 5:
 	url = "http://api.twitter.com/1/statuses/user_timeline.json?screen_name=" + screen_name + "&count=200&trim_user=1&include_rts=1&include_entities=1"
+    elif opt == 6:
+	url = "http://api.twitter.com/1/statuses/show/%d.json" % tid
     else:
 	sys.exit()
 except pg.DatabaseError:
@@ -112,7 +123,7 @@ client = oauth.Client(consumer, token)
 
 pp = pprint.PrettyPrinter(indent=4)
 
-if opt <= 3:
+if opt <= 3 or opt == 6:
     resp, content = client.request(url, "GET")
     js = simplejson.loads(content)
 if opt < 3:
@@ -122,26 +133,74 @@ if opt < 3:
 	elif opt == 2:
 	    #print x
 	    pp.pprint(x)
-elif opt == 3:
-    sql = "INSERT INTO twitter_users (retrieved," + sql_users_fields + ") VALUES (NOW(),"
+elif opt == 6:
+    l = js
+    r = {"id": l["id"], "created_at": l["created_at"], "text": l["text"].encode("utf8"), "in_reply_to_user_id": l["in_reply_to_user_id"],\
+	"in_reply_to_status_id": l["in_reply_to_status_id"], "retweet_count": l["retweet_count"]}
+    if "retweeted_status" in l:
+	if l["retweeted_status"] is not None:
+	    r["retweeted_status"] = l["retweeted_status"]["id"]
+    r["user_id"] = l["user"]["id"]
+    r["screen_name"] = l["user"]["screen_name"]
+    try:
+	if verbose:
+	    print "Inserting..."
+	row = pgconn.insert("tweets", r)
+    except pg.ProgrammingError, pg.InternalError:
+	#print pgconn.error
+	if pgconn.error.find('duplicate key value violates unique constraint "tweets_pkey"') < 0:
+	    print pgconn.error
+	try:
+	    if doupdate:
+		print "Updating..."
+		pgconn.update("tweets", r)
+	except:
+	    print r
+	    print pgconn.error
+	    print "an error has occurred (row cannot be updated)"
+
+# Add user
+if opt == 3 or opt == 6:
+    #sql = "INSERT INTO twitter_users (retrieved," + sql_users_fields + ") VALUES (NOW(),"
     users_fields = sql_users_fields.split(",")
-    d = dict()
-    for f in users_fields:
-	if f == "user_id":
-	    d[f] = js["id"]
-	else:
-	    try:
-		d[f] = js[f].encode("utf8")
-	    except:
-		d[f] = js[f]
-    sql += ")"
-    d['retrieved'] = "NOW()"
-    #print sql
-    #sel = pgconn.query(sql)
-    inserted = pgconn.insert("twitter_users", d)
-elif opt == 4 or opt == 5:
+    ulist = list()
+    if opt == 3:
+	ulist.append({"user": js})
+    elif opt == 6:
+	ulist.append(js)
+    print js
+    for l in ulist:
+	print l
+	d = dict()
+	for f in users_fields:
+	    if f == "user_id":
+		d[f] = js["user"]["id"]
+		d["id"] = js["user"]["id"]
+	    else:
+		try:
+		    d[f] = js["user"][f].encode("utf8")
+		except:
+		    d[f] = js["user"][f]
+	#sql += ")"
+	d['retrieved'] = "NOW()"
+	#print sql
+	#sel = pgconn.query(sql)
+	try:
+	    print d
+	    if verbose:
+		print "Try insert"
+	    inserted = pgconn.insert("twitter_users", d)
+	except pg.ProgrammingError, pg.InternalError:
+	    if verbose:
+		print "Try update"
+	    if doupdate:
+		updated = pgconn.update("twitter_users", d)
+
+if opt == 4 or opt == 5:
     dt = datetime.datetime.now()
     dtstr = datetime.datetime.strftime(dt,'%Y%m%d%H%M')
+    tolerance_max = 100
+    tolerance_count = 0
     print dtstr
     if opt == 4:
 	fname = str(user_id) + "_" + dtstr + ".csv"
@@ -158,7 +217,10 @@ elif opt == 4 or opt == 5:
     #missed_once = False
     for i in range(20):
 	#f = open(dtstr + "_" + "%02d" % str(i) + ".tsv", "rw")
+	if tolerance_count > tolerance_max:
+	    break
 	page = i + 1
+	tolerance_count = 0
 	resp, content = client.request(url + "&page=" + str(page), "GET")
 	print resp
 	tries = 0
@@ -216,40 +278,54 @@ elif opt == 4 or opt == 5:
 		    r = {"id": l["id"], "created_at": l["created_at"], "text": l["text"].encode("utf8"), "in_reply_to_user_id": l["in_reply_to_user_id"],\
 			"in_reply_to_status_id": l["in_reply_to_status_id"]}
 		    #print l
+		    if "retweet_count" in l:
+			r["retweet_count"] = l["retweet_count"]
 		    if "retweeted_status" in l:
 			if l["retweeted_status"] is not None:
 			    r["retweeted_status"] = l["retweeted_status"]["id"]
 		    if opt == 4:
 			r["user_id"] = user_id
+			if "screen_name" in l["user"]:
+			    r["screen_name"] = l["user"]["screen_name"]
 		    elif opt == 5:
 			if l["user"] is not None:
 			    r["user_id"] = l["user"]["id"]
 			r["screen_name"] = screen_name
 		    #print r
-		    row = pgconn.insert("tweets", r)
-		    if row is not None and l["geo"] is not None:
+		    if "geo" in l and l["geo"] is not None:
 			if "type" in l["geo"] and l["geo"]["type"] == "Point" and "coordinates" in l["geo"] and l["geo"]["coordinates"] is not None and len(l["geo"]["coordinates"]) == 2:
 			    lat = l["geo"]["coordinates"][0]
 			    lng = l["geo"]["coordinates"][1]
-			    wkt_point = "POINT(" + str(lat) + " " + str(lng) + ")"
+			    wkt_point = "POINT(" + str(lng) + " " + str(lat) + ")"
+			    r["geo"] = "SRID=4326;" + wkt_point
+			    '''
 			    sql = "UPDATE %(table_name)s SET geo = ST_GeomFromText('%(wkt_point)s', 4326) WHERE id = %(id)d " % {"table_name": "tweets", "wkt_point": wkt_point, "id": row["id"]}
 			    try:
 				pgconn.query(sql)
 			    except:
 				print sql
 				print "geo error: " + wkt_point
+			    '''
+		    if verbose:
+			print r
+		    row = pgconn.insert("tweets", r)
 		except pg.ProgrammingError, pg.InternalError:
 		    if not tobeginning:
+			tolerance_count += 1
 			print last_tweet
 			print "tweets up to date (duplicate found in DB)"
-			sys.exit()
-			break
+			if tolerance_count > tolerance_max:
+			    break
+			else:
+			    continue
 		    try:
 			if doupdate:
 			    pgconn.update("tweets", r)
+			    if verbose:
+				print "update successful"
 			else:
 			    print last_tweet
-			    print "tweets up to date (duplicate found in DB)"
+			    print "tweets up to date (duplicate found in DB) -b"
 		    except:
 			print "an error has occurred (row cannot be updated)"
 	print(len(js))
