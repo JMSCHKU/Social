@@ -11,7 +11,9 @@ except ImportError: import json
 import time
 import datetime
 import string
+
 import mypass
+import sinaweibooauth
 
 __author__ = "Cedric Sam"
 
@@ -20,6 +22,8 @@ table_name = "sinaweibo"
 pgconn = mypass.getConn()
 
 def sinatrace(tid, minimal=False, extra_fields=False, get_users=False, outformat="json"):
+    sw = sinaweibooauth.SinaWeiboOauth()
+    sw.setToken(sw.sinaweiboOauth["oauth_token"], sw.sinaweiboOauth["oauth_token_secret"]) 
     try:
 	tid = long(tid)
     except ValueError:
@@ -31,7 +35,7 @@ u.province user_province, u.city user_city, u.gender user_gender, \
 u.followers_count user_followers_count, u.friends_count user_friends_count, u.retrieved user_retrieved "
     else:
 	extra_fields = ""
-    sql = "SELECT s.id, s.created_at, s.user_id, s.text, u.id AS user_id_ref %(extra_fields)s \
+    sql = "SELECT s.id, s.created_at, s.user_id, s.screen_name, s.text, u.id AS user_id_ref %(extra_fields)s \
 FROM sinaweibo s LEFT JOIN sinaweibo_users u ON s.user_id = u.id \
 WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": extra_fields}
     rows = pgconn.query(sql).dictresult()
@@ -43,22 +47,46 @@ WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": 
     missing_users = list()
     missing_users_ids = list()
     for r in rows:
-	m = re.findall("//@([^:/@ ]*)", r["text"])
+	if r["screen_name"] not in ids_cache:
+	    ids_cache[r["screen_name"]] = r["user_id"]
+	m = re.findall(u"//@([^\:：。\.\：/@\-，,【\[ ]*)", r["text"])
+	#m = re.findall(u"//@([^：/@:, ]*)", r["text"])
 	refs = list()
 	for refname in m:
+	    refname = refname.split("：")[0]
 	    ref = dict()
 	    if refname in ids_cache:
 		ref["id"] = ids_cache[refname]
 	    else:
-		sql_ref = "SELECT u.id FROM sinaweibo_users u WHERE u.screen_name = '%(ref)s' " % { 'ref': refname }
-		rows_ref = pgconn.query(sql_ref).dictresult()
+		#sql_ref = "SELECT u.id FROM sinaweibo_users u WHERE u.screen_name = '%(ref)s' " % { 'ref': refname }
+		sql_ref = "SELECT s.user_id as id FROM sinaweibo s WHERE s.retweeted_status = %(tid)d AND s.created_at < '%(created_at)s' AND s.screen_name = '%(ref)s' ORDER BY s.created_at DESC LIMIT 1 " % { 'tid': tid, "created_at": r["created_at"], 'ref': refname.replace("'","''")}
+		#print sql_ref
+		try:
+		    rows_ref = pgconn.query(sql_ref).dictresult()
+		except pg.ProgrammingError as e:
+		    print e
+		    print refname
+		    continue
+		if len(rows_ref) == 0: # get from users table
+		    sql_ref_fromusers = "SELECT u.id FROM sinaweibo_users u WHERE u.screen_name = '%(ref)s' " % { 'ref': refname }
+		    rows_ref = pgconn.query(sql_ref_fromusers).dictresult()
 		if len(rows_ref) > 0:
 		    ref["id"] = rows_ref[0]["id"]
 		    ids_cache[refname] = ref["id"]
 		else:
-		    ref["id"] = None
-		    ids_cache[refname] = None
-		    missing_users.append(refname)
+		    if get_users:
+			resp = sw.user(None, refname)
+    			try:
+    			    ref["id"] = resp["data"][0]["id"]
+			    ids_cache[refname] = ref["id"]
+    			except KeyError:
+			    ref["id"] = None
+	    		    ids_cache[refname] = None
+			    missing_users.append(refname)
+		    else:
+			ref["id"] = None
+		    	ids_cache[refname] = None
+			missing_users.append(refname)
 	    ref["name"] = refname
 	    refs.append(ref)
 	    count += 1
