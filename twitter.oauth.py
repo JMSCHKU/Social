@@ -7,6 +7,7 @@ import mypass
 import httplib
 import simplejson
 import time
+import socket
 
 import oauth2 as oauth
 import pprint
@@ -31,6 +32,8 @@ tocsv = True
 tobeginning = False
 doupdate = False
 verbose = False
+
+socket.setdefaulttimeout(150)
 
 if len(sys.argv) <= 1:
     print usage
@@ -170,7 +173,8 @@ if opt == 3 or opt == 6:
 	ulist.append(js)
     print js
     for l in ulist:
-	print l
+	if verbose:
+	    print l
 	d = dict()
 	for f in users_fields:
 	    if f == "user_id":
@@ -186,8 +190,8 @@ if opt == 3 or opt == 6:
 	#print sql
 	#sel = pgconn.query(sql)
 	try:
-	    print d
 	    if verbose:
+		print d
 		print "Try insert"
 	    inserted = pgconn.insert("twitter_users", d)
 	except pg.ProgrammingError, pg.InternalError:
@@ -201,19 +205,23 @@ if opt == 4 or opt == 5:
     dtstr = datetime.datetime.strftime(dt,'%Y%m%d%H%M')
     tolerance_max = 100
     tolerance_count = 0
-    print dtstr
+    if verbose:
+	print dtstr
     if opt == 4:
 	fname = str(user_id) + "_" + dtstr + ".csv"
-	print "user_id: " + str(user_id)
+	if verbose:
+	    print "user_id: " + str(user_id)
     else:
 	fname = screen_name + "_" + dtstr + ".csv"
-	print "@" + screen_name
+	if verbose:
+	    print "@" + screen_name
     if tocsv:
 	f = open(fname, "w")
 	cw = csv.writer(f, delimiter="\t", quoting=csv.QUOTE_MINIMAL, quotechar='"', escapechar="\\", lineterminator="\n")
 	cw.writerow(["id", "created_at", "text", "in_reply_to_user_id", "in_reply_to_screen_name", "in_reply_to_status_id", "screen_name", "user_id"])
     elif todb:
-	print "to DB"
+    	if verbose:
+    	    print "to DB"
     #missed_once = False
     for i in range(20):
 	#f = open(dtstr + "_" + "%02d" % str(i) + ".tsv", "rw")
@@ -221,6 +229,8 @@ if opt == 4 or opt == 5:
 	    break
 	page = i + 1
 	tolerance_count = 0
+	if verbose:
+	    print url
 	resp, content = client.request(url + "&page=" + str(page), "GET")
 	print resp
 	tries = 0
@@ -228,7 +238,8 @@ if opt == 4 or opt == 5:
 	    tries += 1
 	    print "trying " + str(tries)
 	    resp, content = client.request(url + "&page=" + str(page), "GET")
-	    print resp['status']
+	    if verbose:
+		print resp['status']
 	    print resp
 	    time.sleep(0.1)
 	    if resp['status'] == '400':
@@ -312,8 +323,9 @@ if opt == 4 or opt == 5:
 		except pg.ProgrammingError, pg.InternalError:
 		    if not tobeginning:
 			tolerance_count += 1
-			print last_tweet
-			print "tweets up to date (duplicate found in DB)"
+			if verbose:
+			    print last_tweet
+			    print "tweets up to date (duplicate found in DB)"
 			if tolerance_count > tolerance_max:
 			    break
 			else:
@@ -324,13 +336,21 @@ if opt == 4 or opt == 5:
 			    if verbose:
 				print "update successful"
 			else:
-			    print last_tweet
-			    print "tweets up to date (duplicate found in DB) -b"
+			    if verbose:
+				print last_tweet
+				print "tweets up to date (duplicate found in DB) -b"
 		    except:
-			print "an error has occurred (row cannot be updated)"
-	print(len(js))
+			if verbose:
+			    print "an error has occurred (row cannot be updated)"
+	if verbose:
+	    print(len(js))
 	if len(js) <= 0:
 	    break
+	try:
+	    sql = "UPDATE twitter_users SET posts_updated = NOW() WHERE id = %d " % user_id
+	    pgconn.query(sql)
+	except pg.ProgrammingError, pg.InternalError:
+	    pass
 	time.sleep(0.1)
     if tocsv:
 	f.close()

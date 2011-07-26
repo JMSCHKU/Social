@@ -3,7 +3,6 @@
 
 import sys
 import pg
-import re
 import json
 import csv
 #import time

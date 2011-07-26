@@ -4,17 +4,51 @@
 # Based on that number, we figure whether this entity is worth "following" (see watch.facebook.sh)
 
 cd ${HOME}/data/facebook/watch/
-LIMIT=800
-LIMIT1=1200
+LIMIT=600
+LIMIT1=800
 THRESHOLD=100
 YESTERDAY=`date -d"yesterday" +%Y-%m-%d`
 BEFORE=`date -d"3 days ago" +%Y-%m-%d`
 LASTHOUR=`date -d"last hour" +"%Y-%m-%d %H:%M:%S"`
-GRACEPERIOD=`date -d"12 hours ago" +"%Y-%m-%d %H:%M:%S"`
+GRACEPERIOD=`date -d"36 hours ago" +"%Y-%m-%d %H:%M:%S"`
+EVENTENDED=`date -d"last week" +"%Y-%m-%d %H:%M:%S"`
+RETRIEVEDTOOOLD=`date -d"1 month ago" +"%Y-%m-%d %H:%M:%S"`
 
-# Correction for Taiwanese events
-SQLETAIWAN="UPDATE facebook_events e SET watching = FALSE WHERE (lower(location) ILIKE '%taiwan%' OR location ILIKE '%臺%' OR location ILIKE '%台灣%' OR location ILIKE '%台北%' OR location ILIKE '%taipei%' OR location ILIKE '%高雄%' OR location ILIKE '%台中%' OR location ILIKE '%台南%') AND location NOT ILIKE '%香港%' AND lower(location) NOT ILIKE '%hong%kong%' "
+# Correction for Taiwanese groups, events or pages
+echo "Cleaning Taiwanese groups, events or pages..."
+echo "Doing groups..."
+SQLGTAIWAN="UPDATE facebook_groups g SET watching = FALSE WHERE watching IS NOT FALSE AND (lower(name) ILIKE '%taiwan%' OR name LIKE '%臺%' OR name LIKE '%台灣%' OR name LIKE '%台北%' OR name ILIKE '%taipei%' OR name LIKE '%高雄%' OR name LIKE '%台中%' OR name LIKE '%台南%' OR name LIKE '%新竹%' OR name LIKE '%花蓮%') AND name NOT LIKE '%香港%' AND lower(name) NOT ILIKE '%hong%kong%' "
+psql -h 127.0.0.1 -U jmsc -c "${SQLGTAIWAN}"
+SQLGTAIWAN="UPDATE facebook_groups g SET watching = FALSE WHERE watching IS NOT FALSE AND (link ilike '%.tw%' or link ilike '%tw.%') and link not ilike '%.hk%' and link not ilike '%hongkong%' "
+psql -h 127.0.0.1 -U jmsc -c "${SQLGTAIWAN}"
+echo "Doing events..."
+SQLETAIWAN="UPDATE facebook_events e SET watching = FALSE WHERE watching IS NOT FALSE AND (description ILIKE '%taiwan%' OR description LIKE '%臺%' OR description LIKE '%台灣%' OR description LIKE '%台北%' OR description ILIKE '%taipei%' OR description LIKE '%高雄%' OR description LIKE '%台中%' OR description LIKE '%台南%' OR description LIKE '%新竹%' OR description LIKE '%花蓮%') AND description NOT LIKE '%香港%' AND description NOT ILIKE '%hong%kong%' "
+echo ${SQLETAIWAN}
 psql -h 127.0.0.1 -U jmsc -c "${SQLETAIWAN}"
+SQLETAIWAN="UPDATE facebook_events e SET watching = FALSE WHERE watching IS NOT FALSE AND (location ILIKE '%taiwan%' OR location LIKE '%臺%' OR location LIKE '%台灣%' OR location LIKE '%台北%' OR location ILIKE '%taipei%' OR location LIKE '%高雄%' OR location LIKE '%台中%' OR location LIKE '%台南%' OR location LIKE '%新竹%' OR location LIKE '%花蓮%') AND location NOT LIKE '%香港%' AND location NOT ILIKE '%hong%kong%' "
+echo ${SQLETAIWAN}
+psql -h 127.0.0.1 -U jmsc -c "${SQLETAIWAN}"
+SQLETAIWAN="UPDATE facebook_events e SET watching = FALSE WHERE watching IS NOT FALSE AND (name ILIKE '%taiwan%' OR name LIKE '%臺%' OR name LIKE '%台灣%' OR name LIKE '%台北%' OR name ILIKE '%taipei%' OR name LIKE '%高雄%' OR name LIKE '%台中%' OR name LIKE '%台南%' OR name LIKE '%新竹%' OR name LIKE '%花蓮%') AND name NOT LIKE '%香港%' AND lower(name) NOT ILIKE '%hong%kong%' "
+echo ${SQLETAIWAN}
+psql -h 127.0.0.1 -U jmsc -c "${SQLETAIWAN}"
+echo "Doing pages..."
+SQLPTAIWAN="UPDATE facebook_pages p SET watching = FALSE WHERE watching IS NOT FALSE AND (name ILIKE '%taiwan%' OR name LIKE '%臺%' OR name LIKE '%台灣%' OR name LIKE '%台北%' OR name ILIKE '%taipei%' OR name LIKE '%高雄%' OR name LIKE '%台中%' OR name LIKE '%台南%' OR name LIKE '%新竹%' OR name LIKE '%花蓮%') AND name NOT LIKE '%香港%' AND lower(name) NOT ILIKE '%hong%kong%' "
+psql -h 127.0.0.1 -U jmsc -c "${SQLPTAIWAN}"
+SQLGTAIWAN="UPDATE facebook_pages g SET watching = FALSE WHERE watching IS NOT FALSE AND (link ilike '%.tw%' or link ilike '%tw.%') and link not ilike '%.hk%' and link not ilike '%hongkong%' "
+psql -h 127.0.0.1 -U jmsc -c "${SQLGTAIWAN}"
+
+# correct ended event
+echo "Cleaning finished events..."
+SQLEENDED="UPDATE facebook_events e SET watching = FALSE WHERE end_time < '${EVENTENDED}' AND watching IS NOT FALSE"
+psql -h 127.0.0.1 -U jmsc -c "${SQLEENDED}"
+echo "Cleaning groups and pages retrieved a while ago..."
+SQLGOLD="UPDATE facebook_groups g SET watching = FALSE WHERE retrieved < '${RETRIEVEDTOOOLD}' AND watching IS NULL"
+psql -h 127.0.0.1 -U jmsc -c "${SQLGOLD}"
+SQLPOLD="UPDATE facebook_pages p SET watching = FALSE WHERE retrieved < '${RETRIEVEDTOOOLD}' AND watching IS NULL"
+psql -h 127.0.0.1 -U jmsc -c "${SQLPOLD}"
+
+
+echo "Creating lists of IDs to check..."
 
 # watching = null (have not been checked)
 SQLG="\\copy (select id, 'group', 'notwatching' from facebook_groups g where watching is null and retrieved < '${GRACEPERIOD}' order by retrieved desc limit ${LIMIT}) to 'groups_checkwatching_null.txt' csv "
@@ -40,8 +74,26 @@ psql -h 127.0.0.1 -U jmsc -c "${SQLGW}"
 psql -h 127.0.0.1 -U jmsc -c "${SQLEW}"
 psql -h 127.0.0.1 -U jmsc -c "${SQLPW}"
 
+# HK-related keywords
+HKKWDIR=/var/data/facebook/hongkong
+rm hkkw_facebook_events.txt hkkw_facebook_pages.txt events_hongkong.txt pages_hongkong.txt
+sort -un ${HKKWDIR}/hkkw_facebook_events_*.txt > hkkw_facebook_events.txt
+sort -un ${HKKWDIR}/hkkw_facebook_pages_*.txt > hkkw_facebook_pages.txt
+while read i
+do
+    echo `echo ${i} | sed 's/\r//g'`,event,hongkong >> events_hongkong.txt
+done < hkkw_facebook_events.txt
+while read i
+do
+    echo `echo ${i} | sed 's/\r//g'`,page,hongkong >> pages_hongkong.txt
+done < hkkw_facebook_pages.txt
+
 rm all_checkwatching.txt
-cat *_checkwatching_null.txt *_checkwatching_notyet.txt *_checkwatching.txt >> all_checkwatching.txt
+cat events_hongkong.txt pages_hongkong.txt *_checkwatching_null.txt *_checkwatching_notyet.txt *_checkwatching.txt >> all_checkwatching.txt
+
+# reinitialise newly watching file
+rm newlywatching.csv
+rm hongkongwatching.csv
 
 while read i
 do
@@ -121,11 +173,11 @@ do
 	    if [ "${WATCHING}" == "watching" ]
 	    then
 		echo "watching is true"
-		if [ "`echo "$X > 1.3 " | bc `" == 1 ] || [ "`echo "${NEWCOUNT} > 499 " bc `" == 1 ]
+		if [ "`echo "$X > 1.2 " | bc `" == 1 ] || [ "`echo "${NEWCOUNT} > 499 " bc `" == 1 ]
 		then
 		    IS_WATCHING=1
 		fi
-		if [ "`echo "$X < 1.03 " | bc `" == 1 ] && [ "${NEWCOUNT}" -gt ${THRESHOLD} ]
+		if [ "`echo "$X < 1.02 " | bc `" == 1 ] && [ "${NEWCOUNT}" -gt ${THRESHOLD} ]
 		then
 		    IS_WATCHING=0
 		fi
@@ -136,25 +188,46 @@ do
 	    elif [ "${WATCHING}" == "notwatching" ] || [ "${WATCHING}" == "notwatchingyet" ]
 	    then
 		echo "watching is null"
-		if [ "`echo "$X <= 1.05 " | bc `" == 1 ]
+		if [ "`echo "$X <= 1.03 " | bc `" == 1 ]
 		then
 		    IS_WATCHING=0
 		fi
-		if [ "`echo "$d < 1 " | bc `" == 1 ]
+		if [ "`echo "$d < -10 " | bc `" == 1 ]
 		then
 		    IS_WATCHING=0
 		fi
-		if [ "`echo "$X > 1.2 " | bc `" == 1 ] && [ "${NEWCOUNT}" -gt ${THRESHOLD} ]
+		if [ "`echo "$X > 1.15 " | bc `" == 1 ] && [ "${NEWCOUNT}" -gt ${THRESHOLD} ]
 		then
 		    IS_WATCHING=1
 		fi
-		if [ "`echo "$d > 40 " | bc `" == 1 ]
+		if [ "`echo "$d > 30 " | bc `" == 1 ]
 		then
 		    IS_WATCHING=1
 		fi
 		if [ "${OLDCOUNT}" -lt ${THRESHOLD} ] && [ "${NEWCOUNT}" -lt ${THRESHOLD} ]
 		then
 		    IS_WATCHING=''
+		fi
+		# for newly added
+		if [ "${IS_WATCHING}" == 1 ]
+		then
+		    echo ${ID},${TYPE} >> newlywatching.csv
+		fi
+	    elif [ "${WATCHING}" == "hongkong" ]
+	    then
+		echo "hong kong"
+		if [ "`echo "$X > 1 " | bc `" == 1 ]
+		then
+		    IS_WATCHING=1
+		fi
+		if [ "`echo "$d > 0 " | bc `" == 1 ]
+		then
+		    IS_WATCHING=1
+		fi
+		# for hongkongwatching
+		if [ "${IS_WATCHING}" == 1 ]
+		then
+		    echo ${ID},${TYPE} >> hongkongwatching.csv
 		fi
 	    fi
 	    if [ "${IS_WATCHING}" == 0 ]
@@ -177,3 +250,6 @@ do
     rm ${ID}_watch_last.csv
 
 done < all_checkwatching.txt
+
+rm *_watch_before.csv
+rm *_watch_last.csv
