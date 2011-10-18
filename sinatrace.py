@@ -22,6 +22,7 @@ table_name = "sinaweibo"
 pgconn = mypass.getConn()
 
 def sinatrace(tid, minimal=False, extra_fields=False, get_users=False, outformat="json"):
+    # For RP: Should try to find the created_at if it's not known or given as argument...
     sw = sinaweibooauth.SinaWeiboOauth()
     sw.setToken(sw.sinaweiboOauth["oauth_token"], sw.sinaweiboOauth["oauth_token_secret"]) 
     try:
@@ -35,9 +36,32 @@ u.province user_province, u.city user_city, u.gender user_gender, \
 u.followers_count user_followers_count, u.friends_count user_friends_count, u.retrieved user_retrieved "
     else:
 	extra_fields = ""
+    '''
+    rps = sw.getRangePartitionByIds([tid])
+    for rp in rps:
+	x = rp.split(",")
+	year = int(x[0])
+	week = int(x[1])
+	break
+    isocal = datetime.datetime.now().isocalendar()
+    year_now = isocal[0]
+    week_now = isocal[1]
+    sw_tables_arr = list()
+    for x in range(year,year_now+1):
+	if year == year_now:
+	    myrange = range(week,week_now+1)
+	elif x == year:
+	    myrange = range(week,54)
+	elif x == year_now:
+	    myrange = range(1,week)
+	for y in myrange:
+	    sw_tables_arr.append("SELECT * FROM rp_sinaweibo_y%(year)dw%(week)d" % { "year": x, "week": y })
+    sw_tables = " UNION ".join(sw_tables_arr)
+    '''
     sql = "SELECT s.id, s.created_at, s.user_id, s.screen_name, s.text, u.id AS user_id_ref %(extra_fields)s \
-FROM sinaweibo s LEFT JOIN sinaweibo_users u ON s.user_id = u.id \
-WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": extra_fields}
+FROM rp_sinaweibo s LEFT JOIN sinaweibo_users u ON s.user_id = u.id \
+WHERE retweeted_status = %(tid)d ORDER BY s.id " % {"tid": tid, "extra_fields": extra_fields }#, "sw_tables": sw_tables}
+    #print sql
     rows = pgconn.query(sql).dictresult()
     out = dict()
     rts = list()
@@ -161,9 +185,13 @@ INTERVAL '%(mins_interval)s min' * ROUND(date_part('minute', s.created_at) \
 	basetime = None
     if basetime is None:
 	sql_period = ""
+	sw_tables = "sinaweibo"
     else:
 	basetime = datetime.datetime.combine(basetime, datetime.time())
 	sql_period = " AND s.created_at >= '%s' " % basetime.strftime("%Y-%m-%d")
+	import sinaweibooauth
+	sw = sinaweibooauth.SinaWeiboOauth()
+	sw_tables = "(%s)" % sw.getRangePartitionSQL(basetime)
     sql_location = ""
     sql_listidjoin = ""
     sql_listid = ""
@@ -173,8 +201,8 @@ INTERVAL '%(mins_interval)s min' * ROUND(date_part('minute', s.created_at) \
     if int(province) > 0:
 	sql_location = " AND u.province = %d " % int(province)
     sql = "SELECT %(interval)s AS time, COUNT(*) AS count, COUNT(DISTINCT s.user_id) AS users \
-FROM sinaweibo s LEFT JOIN sinaweibo_users u ON s.user_id = u.id %(sql_listidjoin)s WHERE retweeted_status = %(tid)d %(sql_period)s %(sql_location)s %(sql_listid)s GROUP BY time ORDER BY time " \
-% {"tid": tid, "interval": sql_interval, "sql_period": sql_period, "sql_location": sql_location, "sql_listidjoin": sql_listidjoin, "sql_listid": sql_listid}
+FROM %(sw_tables)s s LEFT JOIN sinaweibo_users u ON s.user_id = u.id %(sql_listidjoin)s WHERE retweeted_status = %(tid)d %(sql_period)s %(sql_location)s %(sql_listid)s GROUP BY time ORDER BY time " \
+% {"tid": tid, "interval": sql_interval, "sql_period": sql_period, "sql_location": sql_location, "sql_listidjoin": sql_listidjoin, "sql_listid": sql_listid, "sw_tables": sw_tables }
     rows = pgconn.query(sql).dictresult()
     description = {"time": ("string", "Time"),
 		    "count": ("number", "statuses"),

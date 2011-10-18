@@ -7,6 +7,7 @@ import mypass
 import httplib
 import simplejson
 import time
+import string
 
 import oauth2 as oauth
 import pprint
@@ -21,6 +22,9 @@ import socket
 #from weibopy.auth import OAuthHandler, BasicAuthHandler
 #from weibopy.api import API
 
+import lucene
+import sinaweibolucene
+
 class SinaWeiboOauth():
     sinaweiboOauth = mypass.getSinaWeiboOauth()
     pgconn = None
@@ -28,11 +32,13 @@ class SinaWeiboOauth():
     toleranceNotToBeginningLong = 150 # for reposts
     max_gotall_count = 3
     api_wait_secs = 5
+    max_api_misses_half = 3
     max_api_misses = 6
     max_reposts_pages = max_comments_pages = 1000
     max_reposts_blanks = max_comments_blanks = 3
     max_reposts_tries = max_comments_tries = 3
     usage = "sinaweibo.oauth.py [id or file with ids] [primary opts] [sec opts]"
+    rp_dir = "/var/data/sinaweibo/rp"
     comments_dir = "/var/data/sinaweibo/comments"
     reposts_dir = "/var/data/sinaweibo/reposts"
     verbose = False
@@ -40,6 +46,9 @@ class SinaWeiboOauth():
     force_screenname = False
     checkonly = False
     doupdate = False
+    saveRP = False
+    index = False
+    indexer = None
 
     def __init__(self):
 	socket.setdefaulttimeout(300)
@@ -162,15 +171,31 @@ class SinaWeiboOauth():
 		api_misses += 1
 		if api_misses >= self.max_api_misses:
 		    return { "msg": e.reason }
-		if e.reason.find("Error: target weibo does not exist!") > 0:
+		if e.reason.find("Error: target weibo does not exist!") >= 0:
+		    try:
+			rps = self.getRangePartitionByIds([id])
+		    	for x in rps:
+			    yw = x.split(",")
+			    year = int(yw[0])
+			    week = int(yw[1])
+			    sql_deleted = "UPDATE rp_sinaweibo_y%(year)dw%(week)d SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "year": year, "week": week, "id": id }
+			    if self.pgconn is None:
+				self.pgconn = mypass.getConn()
+			    res = self.pgconn.query(sql_deleted)
+		    except pg.ProgrammingError, pg.InternalError:
+			print self.pgconn.error
 		    return { "msg": e.reason }
 		time.sleep(self.api_wait_secs)
 	time_api = time.time() - start_time_api
+	if self.saveRP:
+	    self.saveRangePartitionByIdDate(id, self.getAtt(status, "created_at"))
 	row = self.status_to_row(status)
 	r = dict()
 	if toDB and not self.checkonly:
     	    start_time_db = time.time()
-	    resp = self.toDB("sinaweibo", row, self.doupdate)
+	    tablename = self.getRangePartitionByDate(self.getAtt(status, "created_at"))
+	    #tablename = "rp_sinaweibo"
+    	    resp = self.toDB(tablename, row, self.doupdate)
 	    time_db += time.time() - start_time_db
 	    r = resp
 	    resp["time_db"] = time_db
@@ -205,6 +230,8 @@ class SinaWeiboOauth():
 		if api_misses >= self.max_api_misses:
 		    return { "msg": e.reason }
 		time.sleep(self.api_wait_secs)
+		if string.find(e.reason, "requests out of rate limit") >= 0:
+		    self.waitRateLimit()
 	    except socket.error as e:
 		print e
 		api_misses += 1
@@ -225,7 +252,7 @@ class SinaWeiboOauth():
 	if "count" in r and r["count"] == 0:
 	    if self.pgconn is None:
     		self.pgconn = mypass.getConn()
-	    self.pgconn.query("UPDATE sinaweibo_users SET posts_updated = NOW() WHERE id = %d" % user_id)
+	    #self.pgconn.query("UPDATE sinaweibo_users SET posts_updated = NOW() WHERE id = %d" % user_id)
 	r["time_api"] = time_api
 	r["page"] = page
 	return r
@@ -244,8 +271,25 @@ class SinaWeiboOauth():
 		if api_misses == self.max_api_misses:
 		    return { "msg": e.reason }
 		if e.reason.find("Error: target weibo does not exist!") > 0:
+		    try:
+			rps = self.getRangePartitionByIds([id])
+		    	for x in rps:
+			    yw = x.split(",")
+			    year = int(yw[0])
+			    week = int(yw[1])
+			    sql_deleted = "UPDATE rp_sinaweibo_y%(year)dw%(week)d SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "year": year, "week": week, "id": id }
+			    if self.pgconn is None:
+				self.pgconn = mypass.getConn()
+			    res = self.pgconn.query(sql_deleted)
+		    except pg.ProgrammingError, pg.InternalError:
+			print self.pgconn.error
 		    return { "msg": e.reason }
 		time.sleep(self.api_wait_secs)
+		if e.reason.find("requests out of rate limit") >= 0:
+		    if e.reason.find("IP") >= 0 and api_misses <= self.max_api_misses_half:
+			time.sleep(60) # to consider rolling IPs
+		    else:
+			self.waitRateLimit()
 	time_api = time.time() - start_time_api
 	r = self.status_timeline(timeline, False)
 	r["time_api"] = time_api
@@ -257,6 +301,8 @@ class SinaWeiboOauth():
 	already_exists_count = 0
 	time_db = 0
 	time_db_u = 0
+	if self.index:
+	    time_index = 0
 	deleted_count = 0
 	timeline_users_ids = list()
 	toleranceNotToBeginningCount = 0
@@ -271,12 +317,19 @@ class SinaWeiboOauth():
 		    if self.pgconn is None:
 			self.pgconn = mypass.getConn()
 		    try:
-			sql_deleted = "UPDATE sinaweibo SET deleted = NOW() WHERE id = %d AND deleted IS NULL " % x["id"]
-		    	res = self.pgconn.query(sql_deleted)
+			rps = self.getRangePartitionByIds([x["id"]])
+		    	for x in rps:
+			    yw = x.split(",")
+			    year = int(yw[0])
+			    week = int(yw[1])
+			    sql_deleted = "UPDATE rp_sinaweibo_y%(year)dw%(week)d SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "year": year, "week": week, "id": x["id"] }
+			    res = self.pgconn.query(sql_deleted)
 		    except pg.ProgrammingError, pg.InternalError:
 			print self.pgconn.error
 		    continue
-		resp = self.toDB("sinaweibo", x)
+		tablename = self.getRangePartitionByDate(self.getAtt(l, "created_at"))
+		#tablename = "rp_sinaweibo"
+		resp = self.toDB(tablename, x)
 		time_db += time.time() - start_time_db
 		if not resp["already_exists"] and resp["success"] and not isSingleUser:
 		    timeline_user = self.getAtt(l, "user")
@@ -306,6 +359,15 @@ class SinaWeiboOauth():
 		    newlyadded += 1
 		    if not toBeginning:
 			toleranceNotToBeginningCount = 0
+		    if self.index: # index if the row doesn't already exist
+			time_index_start = time.time()
+			try:
+			    t = time.strptime(x["created_at"],"%Y-%m-%d %H:%M:%S")
+			    created_at_secs = int(time.mktime(t))
+			    self.indexer.indexWeibo(x["id"], x["text"], x["user_id"], created_at_secs)
+			except Exception as e:
+			    print e
+			time_index += time.time() - time_index_start
 	    else:
 		print x
 	r = { "count": len(statuses), "deleted_count": deleted_count }
@@ -315,7 +377,7 @@ class SinaWeiboOauth():
 	    u["posts_updated"] = "NOW()"
 	    start_time_db_u = time.time()
 	    resp_u = self.toDB("sinaweibo_users", u, doupdate=True)
-	    #print resp_u
+	    print resp_u
 	    time_db_u += time.time() - start_time_db_u
 	    r["user_id"] = u["id"]
 	if toDB:
@@ -324,6 +386,8 @@ class SinaWeiboOauth():
 	    r["newly_added"] = newlyadded
 	    r["time_db"] = time_db
 	    r["time_db_u"] = time_db_u
+	if self.index:
+	    r["time_index"] = time_index
 	return r
 
     def comments(self, status_id, count=200, page=1, toDB=True, toBeginning=True):
@@ -339,8 +403,26 @@ class SinaWeiboOauth():
 		api_misses += 1
 		if api_misses == self.max_api_misses:
 		    return { "msg": e.reason }
+		if e.reason.find("Error: target weibo does not exist!") > 0:
+		    try:
+			rps = self.getRangePartitionByIds([status_id])
+		    	for x in rps:
+			    yw = x.split(",")
+			    year = int(yw[0])
+			    week = int(yw[1])
+			    sql_deleted = "UPDATE rp_sinaweibo_y%(year)dw%(week)d SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "year": year, "week": week, "id": status_id }
+			    if self.pgconn is None:
+				self.pgconn = mypass.getConn()
+			    res = self.pgconn.query(sql_deleted)
+		    except pg.ProgrammingError, pg.InternalError:
+			print self.pgconn.error
+		    return { "msg": e.reason }
 		time.sleep(self.api_wait_secs)
-		continue
+		if e.reason.find("requests out of rate limit") >= 0:
+		    if e.reason.find("IP") >= 0 and api_misses <= self.max_api_misses_half:
+			time.sleep(60) # to consider rolling IPs
+		    else:
+			self.waitRateLimit()
 	time_api = time.time() - start_time_api
 	time_db = 0
 	time_db_u = 0
@@ -386,7 +468,7 @@ class SinaWeiboOauth():
 	    else:
 		user = self.api.get_user(user_id=user_id)
 	except weibopy.error.WeibopError as e:
-	    if e.reason.find("User does not exists") > 0:
+	    if e.reason.find("User does not exists") >= 0:
 		if self.pgconn is None:
 		    self.pgconn = mypass.getConn()
 		try:
@@ -424,24 +506,125 @@ class SinaWeiboOauth():
 	already_exists_count = 0
 	time_db = 0
 	start_time_api = time.time()
-	if rel == "friends":
-	    relations = self.api.friends_ids(user_id=user_id, cursor=cursor, count=count)
-	else:
-	    relations = self.api.followers_ids(user_id=user_id, cursor=cursor, count=count)
+	api_misses = 0
+	while api_misses < self.max_api_misses:
+	    try:
+		if rel == "friends":
+		    relations = self.api.friends_ids(id=user_id, cursor=cursor, count=count)
+		else:
+		    relations = self.api.followers_ids(id=user_id, cursor=cursor, count=count)
+	    except httplib.IncompleteRead as h:
+		print h
+		api_misses += 1
+		if api_misses >= self.max_api_misses:
+		    return { "msg": h }
+		time.sleep(self.api_wait_secs)
+	    except weibopy.error.WeibopError as e:
+		api_misses += 1
+		if api_misses == self.max_api_misses:
+		    return { "msg": e.reason }
+		if e.reason.find("requests out of rate limit") >= 0:
+		    self.waitRateLimit()
+		else:
+		    time.sleep(self.api_wait_secs)
+		continue
+	    except socket.error as e:
+		print e
+		api_misses += 1
+		if api_misses >= self.max_api_misses:
+		    return { "msg": e.message }
+		time.sleep(self.api_wait_secs)
 	fids = self.getAtt(relations, "ids")
 	time_api = time.time() - start_time_api
+	r = dict()
 	for fid in fids:
 	    x = { "source_id": user_id, "target_id": fid, "retrieved": "NOW()" } 
 	    start_time_db = time.time()
-	    resp = self.toDB("sinaweibo_" + rel, x, True)
+	    resp = self.toDB("sinaweibo_" + rel, x, doupdate=False)
 	    time_db += time.time() - start_time_db
 	    if resp["already_exists"]:
 		already_exists_count += 1
-	r = { r["ids"]: fids, r["time_api"]: time_api, r["count"]: len(fids) }
+	    r = resp
+	r["ids"] = fids
+	r["time_api"] = time_api
+	r["count"] = len(fids)
 	if toDB:
 	    r["time_db"] = time_db
 	    r["already_exists_count"] = already_exists_count
 	return r
+
+    def waitRateLimit(self):
+	rls = self.api.rate_limit_status()
+	ratelimstatus = { "remaining_hits": self.getAtt(rls, "remaining_hits"), "hourly_limit": self.getAtt(rls, "hourly_limit"), "reset_time_in_seconds": self.getAtt(rls, "reset_time_in_seconds"), "reset_time": self.getAtt(rls, "reset_time") }
+	reset_time = int(self.getAtt(rls, "reset_time_in_seconds")) + self.api_wait_secs
+	if self.verbose:
+	    print "Reset time in %(secs)d seconds (now: %(now)s) " % { "secs": reset_time, "now": datetime.datetime.strftime(datetime.datetime.now(),"%Y-%m-%d %H:%M:%S")}
+	if reset_time > 2700 and reset_time < 3600:
+	    time.sleep(120)
+	elif reset_time > 120:
+	    time.sleep(reset_time + 30)
+	else:
+	    time.sleep(self.api_wait_secs * 5)
+
+    def saveRangePartitionByIdDate(self, id, date):
+	isocal = date.isocalendar()
+	f = open(self.rp_dir + "/ids/" + str(id), "w")
+	f.write(str(isocal[0]) + "," + str(isocal[1]))
+	f.close()
+
+    def getRangePartitionByIds(self, ids=list()):
+	# Prepare the minmax file for Python
+	f_minmax = open(self.rp_dir + "/rp-minmaxids-sw.csv", "r")
+	cr = csv.DictReader(f_minmax)
+	minmaxids = dict()
+	for csvrow in cr:
+	    if not csvrow["year"] in minmaxids: # put year
+		minmaxids[csvrow["year"]] = dict()
+	    if not csvrow["week"] in minmaxids[csvrow["year"]]: # put week
+		minmaxids[csvrow["year"]][csvrow["week"]] = dict()
+	    if len(csvrow["min"]) > 0 and len(csvrow["max"]) > 0:
+		minmaxids[csvrow["year"]][csvrow["week"]]["min"] = long(csvrow["min"])
+		minmaxids[csvrow["year"]][csvrow["week"]]["max"] = long(csvrow["max"])
+	years_sorted = sorted(minmaxids.keys())
+	yearsweeks_sorted = dict()
+	for yeariso in years_sorted: # get a dict per year of sorted weeks
+	    yearsweeks_sorted[yeariso] = sorted(minmaxids[yeariso].keys())
+	if self.verbose:
+	    print yearsweeks_sorted
+	# Mark range partitions to check and keep IDs of weibos
+	rp_tocheck = list()
+	for thisid in ids:
+	    thisid = long(thisid)
+	    thismin = None
+	    thismax = None
+	    donethisid = False
+	    last_within_minmax = False
+	    # we go in the min-max
+	    for year in years_sorted:
+		if donethisid:
+		    break
+		for week in yearsweeks_sorted[year]:
+		    minmax = minmaxids[year][week] # the minmax we are checking currently
+		    lastmin = thismin # not used
+		    lastmax = thismax # not used
+		    if "min" not in minmax or "max" not in minmax: # don't check empty partitions
+			continue
+		    thismin = minmax["min"]
+		    thismax = minmax["max"]
+		    if thismin is None or thismax is None: # don't check empty partitions
+			continue
+		    if thisid >= thismin and thisid <= thismax: # within this partition
+			yw_str = str(year) + "," + str(week)
+			if yw_str not in rp_tocheck:
+			    rp_tocheck.append(yw_str)
+			if last_within_minmax:
+			    donethisid = True
+			    break
+			else:
+			    last_within_minmax = True
+			    continue
+	#return { "rp": rp_tocheck, "ids": ids_tocheck, "ids_str": ids_str_tocheck }
+	return rp_tocheck
 
     def toDB(self, tablename, data, doupdate=False, updatefirst=False):
 	if self.pgconn is None:
@@ -462,7 +645,7 @@ class SinaWeiboOauth():
 				resp["already_exists"] = True
 	    else:
 		try:
-		    print data
+		    #print data
 		    r = self.pgconn.insert(tablename, data)
 		    resp["success"] = True
 		except:
@@ -470,8 +653,9 @@ class SinaWeiboOauth():
 			resp["already_exists"] = True
 	else:
 	    try:
+		#print data
 		self.pgconn.insert(tablename, data)
-		resp["success"] = True
+    		resp["success"] = True
 	    except pg.ProgrammingError, pg.InternalError:
 		if self.pgconn.error.find('duplicate key value violates unique constraint') > 0:
 		    resp["already_exists"] = True
@@ -480,10 +664,36 @@ class SinaWeiboOauth():
 			    self.pgconn.update(tablename, data)
 			    resp["success"] = True
 		    except:
+			resp["reason"] = self.pgconn.error
 			pass
+
 	#pgconn.close()
 	return resp
     
+    def getRangePartitionByDate(self, dt_created_at):
+	isocal = dt_created_at.isocalendar()
+	return "rp_sinaweibo_y" + str(isocal[0]) + "w" + str(isocal[1])
+
+    def getRangePartitionSQL(self, date_start, date_end=datetime.datetime.now(), select_list="*"):
+	isostart = date_start.isocalendar()
+	yearisostart = isostart[0]
+	weekisostart = isostart[1]
+	isoend = date_end.isocalendar()
+	yearisoend = isoend[0]
+	weekisoend = isoend[1]
+	sw_tables_arr = list()
+	for x in range(yearisostart,yearisoend+1):
+	    if yearisostart == yearisoend:
+		weekisorange = range(weekisostart, weekisoend+1)
+	    elif yearisostart == x:
+		weekisorange = range(weekisostart, 54)
+	    elif yearisoend == x:
+		weekisorange = range(1, weekisoend)
+	    for y in weekisorange:
+		sw_tables_arr.append("SELECT %(select_list)s FROM rp_sinaweibo_y%(year)dw%(week)d y%(year)dw%(week)d" % { "select_list": select_list, "year": x, "week": y })
+	sw_tables = " UNION ".join(sw_tables_arr)
+	return sw_tables
+
     # Sends from command-line to the appropriate function
     def dispatch(self, opt, id, output_counts=False):
 	if opt == 1: # user timeline
@@ -497,11 +707,11 @@ class SinaWeiboOauth():
 		out = self.user(id)
 	elif opt == 3: # friends
 	    out = self.socialgraph(id, "friends")
-	    if out["count"] == 5000:
+	    if "count" in out and out["count"] == 5000:
 		out = self.socialgraph(id, "friends", 4999)
 	elif opt == 4: # followers
 	    out = self.socialgraph(id, "followers")
-	    if out["count"] == 5000:
+	    if "count" in out and out["count"] == 5000:
 		out = self.socialgraph(id, "followers", 4999)
 	elif opt == 7: # reposts
 	    blanks_count = 0
@@ -548,10 +758,17 @@ class SinaWeiboOauth():
 	    if output_counts:
 		if self.pgconn is None:
 		    self.pgconn = mypass.getConn()
-		sql_count = "SELECT COUNT(*) FROM sinaweibo WHERE retweeted_status = %d " % id
-		res_count = self.pgconn.query(sql_count).getresult()
+		rps = self.getRangePartitionByIds([id])
+		rps_count = 0
+		for x in rps:
+		    yw = x.split(",")
+		    year = int(yw[0])
+		    week = int(yw[1])
+		    sql_count = "SELECT COUNT(*) FROM rp_sinaweibo_y%(year)dw%(week)d WHERE retweeted_status = %(id)d " % { "year": year, "week": week, "id": id }
+		    res_count = self.pgconn.query(sql_count).getresult()
+		    rps_count += int(res_count[0][0])
 		fo = open(self.reposts_dir + "/counts/" + str(id), "w")
-		fo.write(str(res_count[0][0]))
+		fo.write(str(rps_count))
 		fo.close()
 	elif opt == 8: # comments
 	    blanks_count = 0
@@ -657,9 +874,18 @@ if __name__ == "__main__":
 	    sw.checkonly = True
 	elif sys.argv[i] == "-u" or sys.argv[i] == "--update":
     	    sw.doupdate = True
+	elif sys.argv[i] == "-srp" or sys.argv[i] == "--save-range-partition":
+	    sw.saveRP = True
+	elif sys.argv[i] == "-i" or sys.argv[i] == "--index":
+	    sw.index = True
 
     # bind token and set the api
     sw.setToken(sw.sinaweiboOauth["oauth_token"], sw.sinaweiboOauth["oauth_token_secret"]) 
+
+    # initialize the indexer, if needed
+    if sw.index:
+	lucene.initVM(lucene.CLASSPATH)
+	sw.indexer = sinaweibolucene.IndexSinaWeibo()
 
     # dispatch
     if sw.force_screenname:
@@ -688,9 +914,14 @@ if __name__ == "__main__":
 	    thisout["id"] = id
 	    out.append(thisout)
     output = { "data": out, "opt": opt, "count": len(out), "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") }
+
     if sw.verbose:
 	print output
-
+	
+    if sw.index:
+	sw.indexer.writer.optimize()
+    	sw.indexer.writer.close()
+	sw.indexer.ticker.tick = False
     #sw.auth()
     #sw.setToken("24910039392f0acf7b83b8cb91ee9191", "1363bae989c232bf5db6aefb3e6460c7")
     #print sw.user_timeline(1801443400)
