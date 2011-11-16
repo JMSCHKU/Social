@@ -18,7 +18,7 @@ import sinaweibooauth
 __author__ = "Cedric Sam"
 
 usage = "sinatrace.py [id of status to trace] "
-table_name = "sinaweibo"
+table_name = "rp_sinaweibo"
 pgconn = mypass.getConn()
 
 def sinatrace(tid, minimal=False, extra_fields=False, get_users=False, outformat="json"):

@@ -21,6 +21,28 @@ MAXIMUM_TRIES = 50
 usage = "usage: twitter.oauth.py [1=mentions; 2=followers info by user_id, 3=single user info by screen_name,\
 4=all tweets by user_id, 5=all tweets by screen_name] ID [-d|--database||-c|--csv-out||-b|--to-beginning]"
 
+psql_dateformat = '%Y-%m-%d %H:%M:%S %Z'
+twitter_dateformat = '%a %b %d %H:%M:%S +0000 %Y'
+
+def getRangePartitionByDate(created_at_str):
+    try:
+	created_at = datetime.datetime.strptime(created_at_str, twitter_dateformat)
+    except ValueError:
+	try:
+	    created_at = datetime.datetime.strptime(created_at_str, "%Y-%m-%d %H:%M:%S")
+	except ValueError:
+	    try:
+		created_at = datetime.datetime.strptime(created_at_str, "%Y-%m-%d %H:%M")
+	    except ValueError:
+		try:
+		    created_at = datetime.datetime.strptime(created_at_str, "%Y-%m-%d")
+		except ValueError:
+		    print created_at_str
+		    sys.exit()
+    isocal = created_at.isocalendar()
+    return "twitter.rp_tweets_y" + str(isocal[0]) + "w" + str(isocal[1])
+
+
 pgconn = mypass.getConn()
 
 sql_users_fields = "user_id,name,screen_name,description,profile_image_url,url,protected,followers_count,friends_count,created_at,\
@@ -33,7 +55,11 @@ tobeginning = False
 doupdate = False
 verbose = False
 
-socket.setdefaulttimeout(150)
+socket.setdefaulttimeout(30)
+
+time_db = 0
+time_api = 0
+start_time_api = time.time()
 
 if len(sys.argv) <= 1:
     print usage
@@ -129,6 +155,11 @@ pp = pprint.PrettyPrinter(indent=4)
 if opt <= 3 or opt == 6:
     resp, content = client.request(url, "GET")
     js = simplejson.loads(content)
+
+time_api = time.time() - start_time_api
+
+start_time_db = time.time()
+
 if opt < 3:
     for x in js:
 	if opt == 1:
@@ -148,17 +179,18 @@ elif opt == 6:
     try:
 	if verbose:
 	    print "Inserting..."
-	row = pgconn.insert("tweets", r)
+	tablename = getRangePartitionByDate(r["created_at"])
+	row = pgconn.insert(tablename, r)
     except pg.ProgrammingError, pg.InternalError:
 	#print pgconn.error
-	if pgconn.error.find('duplicate key value violates unique constraint "tweets_pkey"') < 0:
+	if pgconn.error.find('duplicate key value violates unique constraint') < 0:
 	    print pgconn.error
 	try:
 	    if doupdate:
 		print "Updating..."
-		pgconn.update("tweets", r)
+    		pgconn.update(tablename, r)
 	except:
-	    print r
+	    #print r
 	    print pgconn.error
 	    print "an error has occurred (row cannot be updated)"
 
@@ -171,7 +203,7 @@ if opt == 3 or opt == 6:
 	ulist.append({"user": js})
     elif opt == 6:
 	ulist.append(js)
-    print js
+    #print js
     for l in ulist:
 	if verbose:
 	    print l
@@ -203,7 +235,7 @@ if opt == 3 or opt == 6:
 if opt == 4 or opt == 5:
     dt = datetime.datetime.now()
     dtstr = datetime.datetime.strftime(dt,'%Y%m%d%H%M')
-    tolerance_max = 100
+    tolerance_max = 10
     tolerance_count = 0
     if verbose:
 	print dtstr
@@ -223,6 +255,8 @@ if opt == 4 or opt == 5:
     	if verbose:
     	    print "to DB"
     #missed_once = False
+    succeeded = 0
+    failed = 0
     for i in range(20):
 	#f = open(dtstr + "_" + "%02d" % str(i) + ".tsv", "rw")
 	if tolerance_count > tolerance_max:
@@ -232,7 +266,9 @@ if opt == 4 or opt == 5:
 	if verbose:
 	    print url
 	resp, content = client.request(url + "&page=" + str(page), "GET")
-	print resp
+	if verbose:
+	    print resp
+	    print content
 	tries = 0
 	while resp['status'] != '200' and tries < MAXIMUM_TRIES:
 	    tries += 1
@@ -310,7 +346,7 @@ if opt == 4 or opt == 5:
 			    wkt_point = "POINT(" + str(lng) + " " + str(lat) + ")"
 			    r["geo"] = "SRID=4326;" + wkt_point
 			    '''
-			    sql = "UPDATE %(table_name)s SET geo = ST_GeomFromText('%(wkt_point)s', 4326) WHERE id = %(id)d " % {"table_name": "tweets", "wkt_point": wkt_point, "id": row["id"]}
+			    sql = "UPDATE %(table_name)s SET geo = ST_GeomFromText('%(wkt_point)s', 4326) WHERE id = %(id)d " % {"table_name": "rp_tweets", "wkt_point": wkt_point, "id": row["id"]}
 			    try:
 				pgconn.query(sql)
 			    except:
@@ -319,7 +355,9 @@ if opt == 4 or opt == 5:
 			    '''
 		    if verbose:
 			print r
-		    row = pgconn.insert("tweets", r)
+		    tablename = getRangePartitionByDate(r["created_at"])
+		    row = pgconn.insert(tablename, r)
+		    succeeded += 1
 		except pg.ProgrammingError, pg.InternalError:
 		    if not tobeginning:
 			tolerance_count += 1
@@ -332,7 +370,7 @@ if opt == 4 or opt == 5:
 			    continue
 		    try:
 			if doupdate:
-			    pgconn.update("tweets", r)
+			    pgconn.update(tablename, r)
 			    if verbose:
 				print "update successful"
 			else:
@@ -354,3 +392,11 @@ if opt == 4 or opt == 5:
 	time.sleep(0.1)
     if tocsv:
 	f.close()
+
+time_db = time.time() - start_time_db
+
+if verbose:
+    print "API time: " + str(time_api)
+    print "DB time: " + str(time_db)
+    print "Succeeded: " + str(succeeded)
+    print "Failed: " + str(failed)

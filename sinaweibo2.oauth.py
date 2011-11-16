@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import sys
-import os
 import pg
 import mypass
 import httplib
@@ -17,7 +16,7 @@ import datetime
 import csv
 import types
 
-import weibopy # we use our own slightly-extended version of weibopy
+import weibopy2 # we use our own slightly-extended version of weibopy
 import unittest
 import socket
 #from weibopy.auth import OAuthHandler, BasicAuthHandler
@@ -25,6 +24,8 @@ import socket
 
 import lucene
 import sinaweibolucene
+
+import os
 
 class SinaWeiboOauth():
     sinaweiboOauth = mypass.getSinaWeiboOauth()
@@ -38,7 +39,7 @@ class SinaWeiboOauth():
     max_reposts_pages = max_comments_pages = 1000
     max_reposts_blanks = max_comments_blanks = 3
     max_reposts_tries = max_comments_tries = 3
-    usage = "sinaweibo.oauth.py [id or file with ids] [primary opts] [sec opts]"
+    usage = "sinaweibo2.oauth.py [id or file with ids] [primary opts] [sec opts]"
     rp_dir = "/var/data/sinaweibo/rp"
     comments_dir = "/var/data/sinaweibo/comments"
     reposts_dir = "/var/data/sinaweibo/reposts"
@@ -67,17 +68,17 @@ class SinaWeiboOauth():
             return None
 
     def setToken(self, token, tokenSecret):
-        self.auth = weibopy.auth.OAuthHandler(self.sinaweiboOauth["consumer_key"], self.sinaweiboOauth["consumer_secret"])
+        self.auth = weibopy2.auth.OAuthHandler(self.sinaweiboOauth["consumer_key"], self.sinaweiboOauth["consumer_secret"])
         self.auth.setToken(token, tokenSecret)
-        self.api = weibopy.API(self.auth)
+        self.api = weibopy2.API(self.auth)
 
     def auth(self):
-        self.auth = weibopy.auth.OAuthHandler(self.sinaweiboOauth["consumer_key"], self.sinaweiboOauth["consumer_secret"])
+        self.auth = weibopy2.auth.OAuthHandler(self.sinaweiboOauth["consumer_key"], self.sinaweiboOauth["consumer_secret"])
         auth_url = self.auth.get_authorization_url()
         print 'Please authorize: ' + auth_url
         verifier = raw_input('PIN: ').strip()
         self.auth.get_access_token(verifier)
-        self.api = weibopy.API(self.auth)
+        self.api = weibopy2.API(self.auth)
 
     def status_to_row(self, status):
 	x = dict()
@@ -88,7 +89,7 @@ class SinaWeiboOauth():
 		x[a] = att.encode("utf8")
 	    except:
 		x[a] = att
-	for a in ["id", "in_reply_to_user_id", "in_reply_to_status_id", "truncated"]:
+	for a in ["id", "in_reply_to_user_id", "in_reply_to_status_id", "truncated", "reposts_count", "comments_count", "mlevel", "deleted"]:
 	    x[a] = self.getAtt(status, a)
 	try:
 	    rts = self.getAtt(self.getAtt(status, "retweeted_status"), "id")
@@ -132,16 +133,22 @@ class SinaWeiboOauth():
 
     def user_to_row(self, user):
 	x = dict()
-	x["created_at"] = self.getAtt(user, "created_at").strftime("%Y-%m-%d %H:%M:%S")
+	try:
+	    x["created_at"] = self.getAtt(user, "created_at").strftime("%Y-%m-%d %H:%M:%S")
+	except:
+	    print self.getAtt(user, "id")
+	    print self.getAtt(user, "created_at")
+	    x["created_at"] = None
 	x["retrieved"] = "NOW()"
-	for a in ["name", "screen_name", "location", "description", "profile_image_url", "url"]:
+	for a in ["name", "screen_name", "location", "description", "profile_image_url", "url", "avatar_large", "verified_reason"]:
 	    try:
 		att = self.getAtt(user, a)
 		x[a] = att.encode("utf8")
 	    except:
 		x[a] = att
 	for a in ["id", "province", "city", "domain", "gender", "followers_count", "friends_count", "favourites_count", \
-"time_zone", "profile_background_image_url", "profile_use_background_image", "allow_all_act_msg", "geo_enabled", "verified", "following", "statuses_count"]:
+"time_zone", "profile_background_image_url", "profile_use_background_image", "allow_all_act_msg", "geo_enabled", \
+"verified", "following", "statuses_count", "allow_all_comment", "bi_followers_count", "deleted", "verified_type", "lang"]:
 	    x[a] = self.getAtt(user, a)
 	return x
 
@@ -167,13 +174,15 @@ class SinaWeiboOauth():
 	    try:
 		status = self.api.get_status(id=id)
 		break
-	    except weibopy.error.WeibopError as e:
+	    except weibopy2.error.WeibopError as e:
 		print e.reason
 		api_misses += 1
 		if api_misses >= self.max_api_misses:
 		    return { "msg": e.reason }
-		if e.reason.find("Error: target weibo does not exist!") >= 0:
+		if e.reason.find("target weibo does not exist") >= 0:
+		    out = { "msg": e.reason }
 		    try:
+			'''
 			rps = self.getRangePartitionByIds([id])
 		    	for x in rps:
 			    yw = x.split(",")
@@ -182,16 +191,36 @@ class SinaWeiboOauth():
 			    sql_deleted = "UPDATE rp_sinaweibo_y%(year)dw%(week)d SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "year": year, "week": week, "id": id }
 			    if self.pgconn is None:
 				self.pgconn = mypass.getConn()
-			    res = self.pgconn.query(sql_deleted)
+			'''
+			if self.pgconn is None:
+		    	    self.pgconn = mypass.getConn()
+			sql_deleted = "UPDATE rp_sinaweibo SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "id": id }
+		    	res = self.pgconn.query(sql_deleted)
+			sql_status = "SELECT * FROM rp_sinaweibo WHERE id = %(id)d " % { "id": id }
+			res_status = self.pgconn.query(sql_status).dictresult()
+			out["deleted"] = True
+			if len(res_status) > 0:
+			    out["user_id"] = res_status[0]["user_id"]
+			return out
 		    except pg.ProgrammingError, pg.InternalError:
 			print self.pgconn.error
-		    return { "msg": e.reason }
-		time.sleep(self.api_wait_secs)
+		time.sleep(self.api_wait_secs * 1)
 	time_api = time.time() - start_time_api
 	if self.saveRP:
 	    self.saveRangePartitionByIdDate(id, self.getAtt(status, "created_at"))
 	row = self.status_to_row(status)
 	r = dict()
+	if "deleted" in row and row["deleted"] is not None and (row["deleted"] == "1" or row["deleted"] == 1 or row["deleted"] is True):
+	    if self.pgconn is None:
+		self.pgconn = mypass.getConn()
+	    sql_deleted = "UPDATE rp_sinaweibo SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "id": id }
+    	    res = self.pgconn.query(sql_deleted)
+	    sql_status = "SELECT * FROM rp_sinaweibo WHERE id = %(id)d " % { "id": id }
+    	    res_status = self.pgconn.query(sql_status).dictresult()
+	    out = { "msg": "row deleted", "deleted": True }
+	    if len(res_status) > 0:
+		out["user_id"] = res_status[0]["user_id"]
+	    return out
 	if toDB and not self.checkonly:
     	    start_time_db = time.time()
 	    tablename = self.getRangePartitionByDate(self.getAtt(status, "created_at"))
@@ -217,7 +246,7 @@ class SinaWeiboOauth():
 	api_misses = 0
 	while api_misses < self.max_api_misses:
 	    try:
-		timeline = self.api.user_timeline(count=count, page=page, user_id=user_id)
+		timeline = self.api.user_timeline(count=count, page=page, uid=user_id)
 		break
 	    except httplib.IncompleteRead as h:
 		print h
@@ -225,7 +254,7 @@ class SinaWeiboOauth():
 		if api_misses >= self.max_api_misses:
 		    return { "msg": h }
 		time.sleep(self.api_wait_secs)
-	    except weibopy.error.WeibopError as e:
+	    except weibopy2.error.WeibopError as e:
 		print e.reason
 		api_misses += 1
 		if api_misses >= self.max_api_misses:
@@ -249,7 +278,7 @@ class SinaWeiboOauth():
 		time.sleep(self.api_wait_secs)
 	    '''
 	time_api = time.time() - start_time_api
-	r = self.status_timeline(timeline, toBeginning=False)
+	r = self.status_timeline(timeline, toBeginning=False, user_id=user_id)
 	if "count" in r and r["count"] == 0:
 	    if self.pgconn is None:
     		self.pgconn = mypass.getConn()
@@ -266,13 +295,14 @@ class SinaWeiboOauth():
 	    try:
 		timeline = self.api.repost_timeline(count=count, page=page, id=status_id)
 		break
-	    except weibopy.error.WeibopError as e:
+	    except weibopy2.error.WeibopError as e:
 		print e.reason
 		api_misses += 1
 		if api_misses == self.max_api_misses:
 		    return { "msg": e.reason }
-		if e.reason.find("Error: target weibo does not exist!") > 0:
+		if e.reason.find("target weibo does not exist") >= 0:
 		    try:
+			'''
 			rps = self.getRangePartitionByIds([id])
 		    	for x in rps:
 			    yw = x.split(",")
@@ -282,6 +312,11 @@ class SinaWeiboOauth():
 			    if self.pgconn is None:
 				self.pgconn = mypass.getConn()
 			    res = self.pgconn.query(sql_deleted)
+			'''
+			if self.pgconn is None:
+		    	    self.pgconn = mypass.getConn()
+			sql_deleted = "UPDATE rp_sinaweibo SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "id": id }
+		    	res = self.pgconn.query(sql_deleted)
 		    except pg.ProgrammingError, pg.InternalError:
 			print self.pgconn.error
 		    return { "msg": e.reason }
@@ -298,7 +333,7 @@ class SinaWeiboOauth():
 	return r
 
     # common function to go through a timeline and optionally put in the DB
-    def status_timeline(self, statuses, isSingleUser=True, toDB=True, toBeginning=True):
+    def status_timeline(self, statuses, isSingleUser=True, toDB=True, toBeginning=True, user_id=None):
 	already_exists_count = 0
 	time_db = 0
 	time_db_u = 0
@@ -312,12 +347,15 @@ class SinaWeiboOauth():
 	    x = self.status_to_row(l)
 	    if toDB:
 		start_time_db = time.time()
+		if ("user_id" not in x or ("user_id" in x and x["user_id"] is None)) and user_id is not None:
+		    x["user_id"] = user_id
 		# handle deleted statuses
 		if "deleted" in x and x["deleted"] is not None and (x["deleted"] == "1" or x["deleted"] == 1 or x["deleted"] is True):
 		    deleted_count += 1
 		    if self.pgconn is None:
 			self.pgconn = mypass.getConn()
 		    try:
+			'''
 			rps = self.getRangePartitionByIds([x["id"]])
 		    	for x in rps:
 			    yw = x.split(",")
@@ -325,6 +363,9 @@ class SinaWeiboOauth():
 			    week = int(yw[1])
 			    sql_deleted = "UPDATE rp_sinaweibo_y%(year)dw%(week)d SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "year": year, "week": week, "id": x["id"] }
 			    res = self.pgconn.query(sql_deleted)
+			'''
+			sql_deleted = "UPDATE rp_sinaweibo SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "id": x["id"] }
+		    	res = self.pgconn.query(sql_deleted)
 		    except pg.ProgrammingError, pg.InternalError:
 			print self.pgconn.error
 		    continue
@@ -339,7 +380,7 @@ class SinaWeiboOauth():
 		    if not timeline_user_id in timeline_users_ids:
 			start_time_db_u = time.time()
 			u = self.user_to_row(timeline_user)
-			resp_u = self.toDB("sinaweibo_users", u)
+			resp_u = self.toDB("sinaweibo_users", u, doupdate=True)
 			time_db_u += time.time() - start_time_db_u
 			if resp_u["already_exists"] or resp_u["success"]:
 			    timeline_users_ids.append(timeline_user_id)
@@ -399,13 +440,14 @@ class SinaWeiboOauth():
 	    try:
 		comments = self.api.comments(id=status_id, count=count, page=page)
 		break
-	    except weibopy.error.WeibopError as e:
+	    except weibopy2.error.WeibopError as e:
 		print e.reason
 		api_misses += 1
 		if api_misses == self.max_api_misses:
 		    return { "msg": e.reason }
-		if e.reason.find("Error: target weibo does not exist!") > 0:
+		if e.reason.find("target weibo does not exist") >= 0:
 		    try:
+			'''
 			rps = self.getRangePartitionByIds([status_id])
 		    	for x in rps:
 			    yw = x.split(",")
@@ -415,6 +457,11 @@ class SinaWeiboOauth():
 			    if self.pgconn is None:
 				self.pgconn = mypass.getConn()
 			    res = self.pgconn.query(sql_deleted)
+			'''
+			if self.pgconn is None:
+		    	    self.pgconn = mypass.getConn()
+			sql_deleted = "UPDATE rp_sinaweibo SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "id": status_id }
+		    	res = self.pgconn.query(sql_deleted)
 		    except pg.ProgrammingError, pg.InternalError:
 			print self.pgconn.error
 		    return { "msg": e.reason }
@@ -441,7 +488,7 @@ class SinaWeiboOauth():
 		if not resp["already_exists"] and resp["success"] and not comment_user_id in comments_users_ids: # update a user once per cycle
 		    start_time_db_u = time.time()
 		    u = self.user_to_row(comment_user)
-		    resp_u = self.toDB("sinaweibo_users", u)
+		    resp_u = self.toDB("sinaweibo_users", u, doupdate=True)
 		    time_db_u += time.time() - start_time_db_u
 		    if resp_u["already_exists"] or resp_u["success"]:
 			comments_users_ids.append(comment_user_id)
@@ -467,8 +514,8 @@ class SinaWeiboOauth():
 	    if screen_name is not None:
 		user = self.api.get_user(screen_name=screen_name)
 	    else:
-		user = self.api.get_user(user_id=user_id)
-	except weibopy.error.WeibopError as e:
+		user = self.api.get_user(uid=user_id)
+	except weibopy2.error.WeibopError as e:
 	    if e.reason.find("User does not exists") >= 0:
 		if self.pgconn is None:
 		    self.pgconn = mypass.getConn()
@@ -503,7 +550,7 @@ class SinaWeiboOauth():
 	r["time_api"] = time_api
 	return r
 
-    def socialgraph(self, user_id, rel="followers", cursor=-1, count=5000, toDB=True):
+    def socialgraph(self, user_id, rel="followers", cursor=-1, count=5000, page=1, toDB=True):
 	already_exists_count = 0
 	time_db = 0
 	start_time_api = time.time()
@@ -511,16 +558,16 @@ class SinaWeiboOauth():
 	while api_misses < self.max_api_misses:
 	    try:
 		if rel == "friends":
-		    relations = self.api.friends_ids(id=user_id, cursor=cursor, count=count)
+		    relations = self.api.friends_ids(uid=user_id, cursor=cursor, count=count, page=page)
 		else:
-		    relations = self.api.followers_ids(id=user_id, cursor=cursor, count=count)
+		    relations = self.api.followers_ids(uid=user_id, cursor=cursor, count=count, page=page)
 	    except httplib.IncompleteRead as h:
 		print h
 		api_misses += 1
 		if api_misses >= self.max_api_misses:
 		    return { "msg": h }
 		time.sleep(self.api_wait_secs)
-	    except weibopy.error.WeibopError as e:
+	    except weibopy2.error.WeibopError as e:
 		api_misses += 1
 		if api_misses == self.max_api_misses:
 		    return { "msg": e.reason }
@@ -709,11 +756,11 @@ class SinaWeiboOauth():
 	elif opt == 3: # friends
 	    out = self.socialgraph(id, "friends")
 	    if "count" in out and out["count"] == 5000:
-		out = self.socialgraph(id, "friends", 4999)
+		out = self.socialgraph(id, "friends", page=2)
 	elif opt == 4: # followers
 	    out = self.socialgraph(id, "followers")
 	    if "count" in out and out["count"] == 5000:
-		out = self.socialgraph(id, "followers", 4999)
+		out = self.socialgraph(id, "followers", page=2)
 	elif opt == 7: # reposts
 	    blanks_count = 0
 	    gotall_count = 0
@@ -759,15 +806,19 @@ class SinaWeiboOauth():
 	    if output_counts:
 		if self.pgconn is None:
 		    self.pgconn = mypass.getConn()
-		rps = self.getRangePartitionByIds([id])
-		rps_count = 0
-		for x in rps:
-		    yw = x.split(",")
-		    year = int(yw[0])
-		    week = int(yw[1])
-		    sql_count = "SELECT COUNT(*) FROM rp_sinaweibo_y%(year)dw%(week)d WHERE retweeted_status = %(id)d " % { "year": year, "week": week, "id": id }
-		    res_count = self.pgconn.query(sql_count).getresult()
-		    rps_count += int(res_count[0][0])
+		sql_count = "SELECT reposts_count FROM rp_sinaweibo WHERE id = %(id)d " % { "id": id }
+		res_count = self.pgconn.query(sql_count).getresult()
+	    	rps_count = res_count[0][0]
+		if rps_count is None:
+		    rps = self.getRangePartitionByIds([id])
+		    rps_count = 0
+		    for x in rps:
+			yw = x.split(",")
+			year = int(yw[0])
+			week = int(yw[1])
+			sql_count = "SELECT COUNT(*) FROM rp_sinaweibo_y%(year)dw%(week)d WHERE retweeted_status = %(id)d " % { "year": year, "week": week, "id": id }
+			res_count = self.pgconn.query(sql_count).getresult()
+			rps_count += int(res_count[0][0])
 		umask = os.umask(0)
 		fo = open(self.reposts_dir + "/counts/" + str(id), "w")
 		fo.write(str(rps_count))
@@ -816,8 +867,12 @@ class SinaWeiboOauth():
 	    if output_counts:
 		if self.pgconn is None:
 		    self.pgconn = mypass.getConn()
-		sql_count = "SELECT COUNT(*) FROM sinaweibo_comments WHERE status_id = %d " % id
+		sql_count = "SELECT comments_count FROM rp_sinaweibo WHERE id = %(id)d " % { "id": id }
 		res_count = self.pgconn.query(sql_count).getresult()
+	    	rps_count = res_count[0][0]
+		if rps_count is None:
+    		    sql_count = "SELECT COUNT(*) FROM sinaweibo_comments WHERE status_id = %d " % id
+    		    res_count = self.pgconn.query(sql_count).getresult()
 		umask = os.umask(0)
 		fo = open(self.comments_dir + "/counts/" + str(id), "w")
 		fo.write(str(res_count[0][0]))
@@ -825,6 +880,28 @@ class SinaWeiboOauth():
 		os.umask(umask)
 	elif opt == 9: # single status
 	    out = self.get_status(id)
+	    if"deleted" in out and "user_id" in out:
+		out_user = self.user(out["user_id"])
+	    if output_counts:
+		if self.pgconn is None:
+		    self.pgconn = mypass.getConn()
+		sql_count = "SELECT reposts_count, comments_count FROM rp_sinaweibo WHERE id = %(id)d " % { "id": id }
+		res_count = self.pgconn.query(sql_count).getresult()
+		if len(res_count) > 0:
+		    reposts_count = res_count[0][0]
+		    comments_count = res_count[0][1]
+		    if reposts_count is not None:
+			umask = os.umask(0)
+			fo = open(self.reposts_dir + "/counts/" + str(id), "w")
+			fo.write(str(reposts_count))
+			fo.close()
+			os.umask(umask)
+		    if comments_count is not None:
+			umask = os.umask(0)
+			fo = open(self.comments_dir + "/counts/" + str(id), "w")
+			fo.write(str(comments_count))
+			fo.close()
+			os.umask(umask)
 	else:
 	    out = None
 	return out
