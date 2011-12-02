@@ -30,6 +30,9 @@ class GooglePlus():
     already_exists_count = 0
     entities = False
     doupdate = False
+    actors = list()
+    MAX_TRIES_ACTIVITIES = 5
+    API_WAIT_SECS = 5
 
     def __init__(self):
 	self.googlepluskey = mypass.getGooglePlusKey()
@@ -41,15 +44,14 @@ class GooglePlus():
 	#if self.verbose:
 	#    print data
 	r = data
-	r["image_url"] = data["image"]["url"]
-	r["displayname"] = data["displayName"]
+	if "image" in data:
+	    r["image_url"] = data["image"]["url"]
 	for a in ["displayName","url","image_url","objectType","nickname","tagline","birthday","currentLocation","relationshipStatus","hasApp","aboutMe","gender"]:
 	    if a in data:
 		try:
 		    r[a.lower()] = data[a].encode("utf8")
 		except:
 		    r[a.lower()] = data[a]
-	#r["id"] = int(data["id"])
 	start_time_db = time.time()
 	dbresp = self.toDB("googleplus_people", r, doupdate=self.doupdate)
 	self.time_db += time.time() - start_time_db
@@ -87,6 +89,7 @@ class GooglePlus():
 	url = "https://www.googleapis.com/plus/v1/people/%s"
 	data = dict(key=self.api_key, prettyPrint=self.prettyPrint)
 	url = url % str(user_id)
+	print url + "?" + urllib.urlencode(data)
 	resp, content = self.http.request(url + "?" + urllib.urlencode(data))
 	js = json.loads(content)
 	start_time_db = time.time()
@@ -128,6 +131,177 @@ class GooglePlus():
 	    out["time_db_entities"] = self.time_db_entities
 	return out
 
+    def activities(self, data):
+	r = data
+	if "image" in data and data["image"] is not None:
+	    r["image_url"] = data["image"]["url"]
+	if "provider" in data and data["provider"] is not None:
+	    r["provider_title"] = data["provider"]["title"]
+	if "actor" in data and data["actor"] is not None:
+	    r["actor_id"] = data["actor"]["id"]
+	if "access" in data and data["access"] is not None:
+	    r["access_kind"] = data["access"]["kind"]
+	if "object" in data and data["object"] is not None:
+	    obj = data["object"]
+	    for a in ["objectType", "originalContent", "content"]:
+		if a in obj and obj[a] is not None and len(obj[a]) > 0:
+		    try:
+			r[a.lower()] = obj[a].encode("utf8")
+		    except:
+			r[a.lower()] = obj[a]
+	    if "replies" in obj and obj["replies"] is not None:
+		if "totalItems" in obj["replies"]:
+		    r["replies_totalitems"] = obj["replies"]["totalItems"]
+	    if "plusoners" in obj and obj["plusoners"] is not None:
+		if "totalItems" in obj["plusoners"]:
+		    r["plusoners_totalitems"] = obj["plusoners"]["totalItems"]
+	    if "resharers" in obj and obj["resharers"] is not None:
+		if "totalItems" in obj["resharers"]:
+		    r["resharers_totalitems"] = obj["resharers"]["totalItems"]
+	    if "attachements" in obj and obj["attachements"] is not None:
+		r["attachements_totalitems"] = len(obj["attachements"])
+		for attachment in obj["attachements"]:
+		    self.attachments(attachment)
+	for a in ["title", "url", "verb", "annotation", "crosspostSource", "address", "placeId", "placeName"]:
+	    if a in data:
+		try:
+		    r[a.lower()] = data[a].encode("utf8")
+		except:
+		    r[a.lower()] = data[a]
+	if "geocode" in data and data["geocode"] is not None and len(data["geocode"]) > 0:
+	    latlng = data["geocode"].split(" ")
+	    if len(latlng) == 2:
+		lat = latlng[0]
+		lng = latlng[1]
+		wkt_point = "POINT(" + str(lng) + " " + str(lat) + ")"
+		#print wkt_point
+		r["geocode"] = "SRID=4326;" + wkt_point
+	start_time_db = time.time()
+	dbresp = self.toDB("googleplus_activities", r, doupdate=self.doupdate)
+	#print dbresp
+	self.time_db += time.time() - start_time_db
+	# Adding entities
+	dbresp_entities = list()
+	if dbresp["success"] or self.entities:
+	    for t in ["actor", "object", "access"]:
+		if t in r:
+		    if t == "actor":
+			actor = r[t]
+			actor_id = actor["id"]
+			if actor_id not in self.actors:
+			    dbresp_entity = self.people(actor)
+			    dbresp_entity["entity"] = t
+			    self.actors.append(actor_id)
+			    dbresp_entities.append(dbresp_entity)
+		    elif t == "access":
+			for x in r[t]["items"]:
+			    if "id" in x:
+				self.toDB("googleplus_accesses", x)
+				self.toDB("googleplus_activitiesaccesses", {"activities_id": r["id"], "accesses_id": x["id"]})
+		    #for x in r[t]:
+	if dbresp["success"]:
+	    if dbresp["already_exists"]:
+		self.already_exists_count += 1
+	    else:
+		self.newlyadded += 1
+	dbresp["entities"] = dbresp_entities
+	return dbresp
+
+    def activities_get(self, activity_id):
+	url = "https://www.googleapis.com/plus/v1/activities/%s"
+	data = dict(key=self.api_key, prettyPrint=self.prettyPrint)
+	url = url % str(activity_id)
+	if self.verbose:
+    	    print url + "?" + urllib.urlencode(data)
+	resp, content = self.http.request(url + "?" + urllib.urlencode(data))
+	js = json.loads(content)
+	start_time_db = time.time()
+	out = self.activities(js)
+	self.time_db += time.time() - start_time_db
+	return out
+
+    def activities_list(self, user_id, collection="public", maxResults=20, pageToken=""):
+	loops = 0
+	url = "https://www.googleapis.com/plus/v1/people/%(user_id)s/activities/%(collection)s"
+	data = dict(key=self.api_key, prettyPrint=self.prettyPrint)
+	url = url % { "user_id": str(user_id), "collection": str(collection) }
+	self.actors.append(str(user_id)) # no need to add self again
+	if self.verbose:
+	    print url + "?" + urllib.urlencode(data)
+	if len(pageToken) > 0:
+	    time.sleep(self.api_wait_secs)
+	    self.recurse_depth += 1
+	    print "recurse: %d " % self.recurse_depth
+	deleted_count = 0
+	out = dict()
+	data = dict(key=self.api_key, user_id=user_id, collection=collection, maxResults=maxResults, pageToken=pageToken, prettyPrint=self.prettyPrint)
+	while True and loops < self.MAX_TRIES_ACTIVITIES:
+	    start_time_db = time.time()
+    	    start_time_api = time.time()
+    	    resp, content = self.http.request(url + "?" + urllib.urlencode(data))
+    	    self.time_api = time.time() - start_time_api
+    	    #out["resp"] = resp
+    	    js = json.loads(content)
+	    loops += 1
+	    if "items" in js:
+		break
+	    time.sleep(self.API_WAIT_SECS)
+	#out["content"] = js
+	if "nextPageToken" in js:
+	    nextPageToken = js["nextPageToken"]
+	else:
+	    nextPageToken = ""
+	#out["dbresp"] = list()
+	for item in js["items"]:
+	    start_time_db = time.time()
+	    self.activities(item)
+	    self.time_db += time.time() - start_time_db
+	if self.recurse and self.recurse_depth < self.recurse_maxdepth and len(nextPageToken) > 0:
+	    self.activities_list(user_id=user_id, collection=collection, maxResults=maxResults, pageToken=nextPageToken)
+	else:
+	    out["newly_added"] = self.newlyadded
+	    out["time_api"] = self.time_api
+	    out["time_db"] = self.time_db
+	    out["time_db_entities"] = self.time_db_entities
+	return out
+
+    def activities_search(self, query, language="en", maxResults=20, pageToken=""):
+	if len(pageToken) > 0:
+	    time.sleep(self.api_wait_secs)
+	    self.recurse_depth += 1
+	    print "recurse: %d " % self.recurse_depth
+	deleted_count = 0
+	out = dict()
+	url = "https://www.googleapis.com/plus/v1/activities"
+	data = dict(key=self.api_key, query=query, language=language, maxResults=maxResults, pageToken=pageToken, prettyPrint=self.prettyPrint)
+	start_time_db = time.time()
+	start_time_api = time.time()
+	resp, content = self.http.request(url + "?" + urllib.urlencode(data))
+	self.time_api = time.time() - start_time_api
+	#out["resp"] = resp
+	js = json.loads(content)
+	#out["content"] = js
+	if "nextPageToken" in js:
+	    nextPageToken = js["nextPageToken"]
+	else:
+	    nextPageToken = ""
+	#out["dbresp"] = list()
+	for item in js["items"]:
+	    start_time_db = time.time()
+	    self.activities(item)
+	    self.time_db += time.time() - start_time_db
+	if self.recurse and self.recurse_depth < self.recurse_maxdepth and len(nextPageToken) > 0:
+	    self.activities_search(query=query, language=language, maxResults=maxResults, pageToken=nextPageToken)
+	else:
+	    out["newly_added"] = self.newlyadded
+	    out["time_api"] = self.time_api
+	    out["time_db"] = self.time_db
+	    out["time_db_entities"] = self.time_db_entities
+	return out
+
+    def attachments(self, data):
+	pass
+
     def toDB(self, tablename, data, doupdate=False, updatefirst=False):
 	if self.pgconn is None:
 	    self.pgconn = mypass.getConn()
@@ -163,6 +337,7 @@ class GooglePlus():
 		if r is not None and "id" in r:
 		    resp["id"] = r["id"]
 	    except pg.ProgrammingError, pg.InternalError:
+		resp["reason"] = self.pgconn.error
 		if self.pgconn.error.find('duplicate key value violates unique constraint') > 0:
 		    resp["already_exists"] = True
 		    try:
@@ -180,11 +355,16 @@ class GooglePlus():
 
 if __name__ == "__main__":
     gp = GooglePlus()
+    out = dict()
 
     if len(sys.argv) > 0:
 	opt = sys.argv[1]
 	if opt == "-p":
 	    opt = 2 # people
+	if opt == "-a":
+	    opt = 3 # activities
+	if opt == "-al":
+	    opt = 4 # activities list
 
     for i in range(2, len(sys.argv)):
 	if sys.argv[i] == "-v" or sys.argv[i] == "--verbose":
@@ -208,6 +388,24 @@ if __name__ == "__main__":
 			q += " "
 		    q += sys.argv[i]
 	    out = gp.people_search(q)
+    elif opt == 3:
+	try:
+	    activity_id = int(sys.argv[2])
+	    out = gp.activities_get(activity_id)
+	except ValueError:
+	    q = ""
+	    for i in range(2, len(sys.argv)):
+		if not sys.argv[i].startswith("-"):
+		    if len(q) > 0:
+			q += " "
+		    q += sys.argv[i]
+	    out = gp.activities_search(q)
+    elif opt == 4:
+	try:
+	    user_id = int(sys.argv[2])
+	    out = gp.activities_list(user_id, "public")
+	except ValueError:
+	    pass
 
     if gp.verbose:
 	print out
