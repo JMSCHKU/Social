@@ -31,7 +31,7 @@ class GooglePlus():
     entities = False
     doupdate = False
     actors = list()
-    MAX_TRIES_ACTIVITIES = 5
+    MAX_TRIES_ACTIVITIES = 6
     API_WAIT_SECS = 5
 
     def __init__(self):
@@ -133,6 +133,8 @@ class GooglePlus():
 
     def activities(self, data):
 	r = data
+	r_attaches = list()
+	attachments = list()
 	if "image" in data and data["image"] is not None:
 	    r["image_url"] = data["image"]["url"]
 	if "provider" in data and data["provider"] is not None:
@@ -158,10 +160,15 @@ class GooglePlus():
 	    if "resharers" in obj and obj["resharers"] is not None:
 		if "totalItems" in obj["resharers"]:
 		    r["resharers_totalitems"] = obj["resharers"]["totalItems"]
-	    if "attachements" in obj and obj["attachements"] is not None:
-		r["attachements_totalitems"] = len(obj["attachements"])
-		for attachment in obj["attachements"]:
-		    self.attachments(attachment)
+	    if "attachments" in obj and obj["attachments"] is not None:
+		r["attachments_totalitems"] = len(obj["attachments"])
+		for attachment in obj["attachments"]:
+		    try:
+			r_attach = self.attachments(attachment)
+		    except:
+			continue
+		    r_attaches.append(r_attach)
+		    attachments.append(attachment)
 	for a in ["title", "url", "verb", "annotation", "crosspostSource", "address", "placeId", "placeName"]:
 	    if a in data:
 		try:
@@ -178,7 +185,7 @@ class GooglePlus():
 		r["geocode"] = "SRID=4326;" + wkt_point
 	start_time_db = time.time()
 	dbresp = self.toDB("googleplus_activities", r, doupdate=self.doupdate)
-	#print dbresp
+	print dbresp
 	self.time_db += time.time() - start_time_db
 	# Adding entities
 	dbresp_entities = list()
@@ -198,6 +205,9 @@ class GooglePlus():
 			    if "id" in x:
 				self.toDB("googleplus_accesses", x)
 				self.toDB("googleplus_activitiesaccesses", {"activities_id": r["id"], "accesses_id": x["id"]})
+		    elif t == "object":
+			for x in attachments:
+			    self.toDB("googleplus_activitiesattachments", {"activities_id": r["id"], "attachment_id": x["url"]})
 		    #for x in r[t]:
 	if dbresp["success"]:
 	    if dbresp["already_exists"]:
@@ -205,6 +215,7 @@ class GooglePlus():
 	    else:
 		self.newlyadded += 1
 	dbresp["entities"] = dbresp_entities
+	dbresp["attachments"] = r_attaches
 	return dbresp
 
     def activities_get(self, activity_id):
@@ -252,10 +263,11 @@ class GooglePlus():
 	else:
 	    nextPageToken = ""
 	#out["dbresp"] = list()
-	for item in js["items"]:
-	    start_time_db = time.time()
-	    self.activities(item)
-	    self.time_db += time.time() - start_time_db
+	if "items" in js:
+	    for item in js["items"]:
+		start_time_db = time.time()
+		self.activities(item)
+		self.time_db += time.time() - start_time_db
 	if self.recurse and self.recurse_depth < self.recurse_maxdepth and len(nextPageToken) > 0:
 	    self.activities_list(user_id=user_id, collection=collection, maxResults=maxResults, pageToken=nextPageToken)
 	else:
@@ -300,7 +312,25 @@ class GooglePlus():
 	return out
 
     def attachments(self, data):
-	pass
+	r = data
+	for a in ["image", "fullImage", "embed"]:
+	    if a in data and data[a] is not None:
+		if "url" in data[a]:
+		    r[a.lower() + "_url"] = data[a]["url"]
+		if "type" in data[a]:
+		    r[a.lower() + "_type"] = data[a]["type"]
+		if "height" in data[a]:
+		    r[a.lower() + "_height"] = data[a]["height"]
+		if "width" in data[a]:
+		    r[a.lower() + "_width"] = data[a]["width"]
+	for a in ["objectType", "displayName", "content", "url", "image_url", "fullimage_url"]:
+	    if a in r and r[a] is not None:
+		try:
+		    r[a.lower()] = r[a].encode("utf8")
+		except:
+		    r[a.lower()] = r[a]
+	dbresp = self.toDB("googleplus_attachments", r)
+	return dbresp
 
     def toDB(self, tablename, data, doupdate=False, updatefirst=False):
 	if self.pgconn is None:
