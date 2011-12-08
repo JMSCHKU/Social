@@ -10,4 +10,6 @@ twitter.oauth.py and facebook.oauth.py perform various pull operations from Twit
 
 twitter_pull.sql and facebook_pull.sql should create the postgresql databases needed to store the data of these aforementioned scripts.
 
+In late November 2011, we added scripts to fetch data from the Google+ and the QQ Weibo API. The database schema are available in their respective sub-directories.
+
 These scripts are developed under Linux (Ubuntu Lucid 10.04). I used Python 2.6.5 and my version of Postgresql is 8.4 (with Postgis 1.5).

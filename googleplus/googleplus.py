@@ -98,6 +98,7 @@ class GooglePlus():
 	return out
 
     def people_search(self, query, language="en", maxResults=20, pageToken=""):
+	loops = 0
 	if len(pageToken) > 0:
 	    time.sleep(self.api_wait_secs)
 	    self.recurse_depth += 1
@@ -106,22 +107,28 @@ class GooglePlus():
 	out = dict()
 	url = "https://www.googleapis.com/plus/v1/people"
 	data = dict(key=self.api_key, query=query, language=language, maxResults=maxResults, pageToken=pageToken, prettyPrint=self.prettyPrint)
-	start_time_db = time.time()
-	start_time_api = time.time()
-	resp, content = self.http.request(url + "?" + urllib.urlencode(data))
-	self.time_api = time.time() - start_time_api
-	#out["resp"] = resp
-	js = json.loads(content)
+	while True and loops < self.MAX_TRIES_ACTIVITIES:
+	    start_time_db = time.time()
+	    start_time_api = time.time()
+	    resp, content = self.http.request(url + "?" + urllib.urlencode(data))
+	    self.time_api = time.time() - start_time_api
+	    #out["resp"] = resp
+	    js = json.loads(content)
+	    loops += 1
+	    if "items" in js:
+		break
+	    time.sleep(self.API_WAIT_SECS)
 	#out["content"] = js
 	if "nextPageToken" in js:
 	    nextPageToken = js["nextPageToken"]
 	else:
 	    nextPageToken = ""
 	#out["dbresp"] = list()
-	for item in js["items"]:
-	    start_time_db = time.time()
-	    self.people(item)
-	    self.time_db += time.time() - start_time_db
+	if "items" in js:
+	    for item in js["items"]:
+		start_time_db = time.time()
+		self.people(item)
+		self.time_db += time.time() - start_time_db
 	if self.recurse and self.recurse_depth < self.recurse_maxdepth and len(nextPageToken) > 0:
 	    self.people_search(query=query, language=language, maxResults=maxResults, pageToken=nextPageToken)
 	else:
@@ -206,8 +213,16 @@ class GooglePlus():
 				self.toDB("googleplus_accesses", x)
 				self.toDB("googleplus_activitiesaccesses", {"activities_id": r["id"], "accesses_id": x["id"]})
 		    elif t == "object":
+			print attachments
 			for x in attachments:
-			    self.toDB("googleplus_activitiesattachments", {"activities_id": r["id"], "attachment_id": x["url"]})
+			    attachment = None
+			    if "url" in x and x["url"] is not None:
+				attachment_id = x["url"]
+			    elif "id" in x and x["id"] is not None:
+				attachment_id = x["id"]
+			    else:
+				continue
+			    self.toDB("googleplus_activitiesattachments", {"activities_id": r["id"], "attachment_url": attachment_id})
 		    #for x in r[t]:
 	if dbresp["success"]:
 	    if dbresp["already_exists"]:
@@ -251,18 +266,15 @@ class GooglePlus():
     	    start_time_api = time.time()
     	    resp, content = self.http.request(url + "?" + urllib.urlencode(data))
     	    self.time_api = time.time() - start_time_api
-    	    #out["resp"] = resp
     	    js = json.loads(content)
 	    loops += 1
 	    if "items" in js:
 		break
 	    time.sleep(self.API_WAIT_SECS)
-	#out["content"] = js
 	if "nextPageToken" in js:
 	    nextPageToken = js["nextPageToken"]
 	else:
 	    nextPageToken = ""
-	#out["dbresp"] = list()
 	if "items" in js:
 	    for item in js["items"]:
 		start_time_db = time.time()
