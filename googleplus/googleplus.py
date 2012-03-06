@@ -9,6 +9,7 @@ import httplib2
 import time
 import string
 import json
+import types
 
 class GooglePlus():
 
@@ -30,7 +31,10 @@ class GooglePlus():
     already_exists_count = 0
     entities = False
     doupdate = False
+    getall = False
     actors = list()
+    toleranceNotToBeginningCount = 0
+    toleranceNotToBeginning = 10
     MAX_TRIES_ACTIVITIES = 6
     API_WAIT_SECS = 5
 
@@ -44,8 +48,16 @@ class GooglePlus():
 	#if self.verbose:
 	#    print data
 	r = data
-	if "image" in data:
+	if "image" in data and data["image"] is not None:
 	    r["image_url"] = data["image"]["url"]
+	if "name" in data and data["name"] is not None:
+	    obj = data["name"]
+	    for a in ["familyName", "givenName", "middleName", "honorificPrefix", "honorificSuffix"]:
+		if a in obj and obj[a] is not None and len(obj[a]) > 0:
+		    try:
+			r[a.lower()] = obj[a].encode("utf8")
+		    except:
+			r[a.lower()] = obj[a]
 	for a in ["displayName","url","image_url","objectType","nickname","tagline","birthday","currentLocation","relationshipStatus","hasApp","aboutMe","gender"]:
 	    if a in data:
 		try:
@@ -246,7 +258,8 @@ class GooglePlus():
 	self.time_db += time.time() - start_time_db
 	return out
 
-    def activities_list(self, user_id, collection="public", maxResults=20, pageToken=""):
+    def activities_list(self, user_id, collection="public", maxResults=100, pageToken=""):
+	self.toleranceNotToBeginningCount = 0
 	loops = 0
 	url = "https://www.googleapis.com/plus/v1/people/%(user_id)s/activities/%(collection)s"
 	data = dict(key=self.api_key, prettyPrint=self.prettyPrint)
@@ -278,9 +291,13 @@ class GooglePlus():
 	if "items" in js:
 	    for item in js["items"]:
 		start_time_db = time.time()
-		self.activities(item)
+		resp = self.activities(item)
 		self.time_db += time.time() - start_time_db
-	if self.recurse and self.recurse_depth < self.recurse_maxdepth and len(nextPageToken) > 0:
+		if resp["already_exists"]:
+		    self.toleranceNotToBeginningCount += 1
+		if self.toleranceNotToBeginningCount >= self.toleranceNotToBeginning:
+		    break
+	if self.recurse and self.recurse_depth < self.recurse_maxdepth and len(nextPageToken) > 0 and self.toleranceNotToBeginningCount < self.toleranceNotToBeginning:
 	    self.activities_list(user_id=user_id, collection=collection, maxResults=maxResults, pageToken=nextPageToken)
 	else:
 	    out["newly_added"] = self.newlyadded
@@ -343,6 +360,116 @@ class GooglePlus():
 		    r[a.lower()] = r[a]
 	dbresp = self.toDB("googleplus_attachments", r)
 	return dbresp
+
+    def comments(self, data):
+	r = data
+	if "actor" in data and data["actor"] is not None:
+	    r["actor_id"] = data["actor"]["id"]
+	if "inReplyTo" in data and data["inReplyTo"] is not None and type(data["inReplyTo"]) is types.ListType and len(data["inReplyTo"]) > 0:
+	    inreplyto_ids = list()
+	    for inreplyto in data["inReplyTo"]:
+		if "id" in inreplyto and inreplyto["id"] is not None:
+		    inreplyto_ids.append(str(inreplyto["id"]))
+	    r["inreplyto"] = '{%s}' % ",".join(inreplyto_ids)
+	if "object" in data and data["object"] is not None:
+	    obj = data["object"]
+	    for a in ["objectType", "content"]:
+		if a in obj and obj[a] is not None and len(obj[a]) > 0:
+		    try:
+			r[a.lower()] = obj[a].encode("utf8")
+		    except:
+			r[a.lower()] = obj[a]
+	for a in ["verb"]:
+	    if a in data:
+		try:
+		    r[a.lower()] = data[a].encode("utf8")
+		except:
+		    r[a.lower()] = data[a]
+	start_time_db = time.time()
+	dbresp = self.toDB("googleplus_comments", r, doupdate=self.doupdate)
+	print dbresp
+	self.time_db += time.time() - start_time_db
+	# Adding entities
+	dbresp_entities = list()
+	if dbresp["success"] or self.entities:
+	    for t in ["actor"]:
+		if t in r:
+		    if t == "actor":
+			actor = r[t]
+			actor_id = actor["id"]
+			if actor_id not in self.actors:
+			    dbresp_entity = self.people(actor)
+			    print dbresp_entity
+			    dbresp_entity["entity"] = t
+			    self.actors.append(actor_id)
+			    dbresp_entities.append(dbresp_entity)
+	if dbresp["success"]:
+	    if dbresp["already_exists"]:
+		self.already_exists_count += 1
+	    else:
+		self.newlyadded += 1
+	dbresp["entities"] = dbresp_entities
+	return dbresp
+
+    def comments_get(self, comment_id):
+	url = "https://www.googleapis.com/plus/v1/comments/%s"
+	data = dict(key=self.api_key, prettyPrint=self.prettyPrint)
+	url = url % str(comment_id)
+	if self.verbose:
+    	    print url + "?" + urllib.urlencode(data)
+	resp, content = self.http.request(url + "?" + urllib.urlencode(data))
+	js = json.loads(content)
+	start_time_db = time.time()
+	out = self.comments(js)
+	self.time_db += time.time() - start_time_db
+	return out
+
+    def comments_list(self, activity_id, maxResults=100, pageToken="", sortOrder="descending"):
+	self.toleranceNotToBeginningCount = 0
+	loops = 0
+	url = "https://www.googleapis.com/plus/v1/activities/%s/comments"
+	data = dict(key=self.api_key, prettyPrint=self.prettyPrint)
+	url = url % str(activity_id)
+	if self.verbose:
+	    print url + "?" + urllib.urlencode(data)
+	if len(pageToken) > 0:
+	    time.sleep(self.api_wait_secs)
+	    self.recurse_depth += 1
+	    print "recurse: %d " % self.recurse_depth
+	deleted_count = 0
+	out = dict()
+	data = dict(key=self.api_key, activity_id=activity_id, maxResults=maxResults, pageToken=pageToken, sortOrder=sortOrder, prettyPrint=self.prettyPrint)
+	while True and loops < self.MAX_TRIES_ACTIVITIES:
+	    start_time_db = time.time()
+    	    start_time_api = time.time()
+    	    resp, content = self.http.request(url + "?" + urllib.urlencode(data))
+    	    self.time_api = time.time() - start_time_api
+    	    js = json.loads(content)
+	    loops += 1
+	    if "items" in js:
+		break
+	    time.sleep(self.API_WAIT_SECS)
+	if "nextPageToken" in js:
+	    nextPageToken = js["nextPageToken"]
+	else:
+	    nextPageToken = ""
+	if "items" in js:
+	    for item in js["items"]:
+		start_time_db = time.time()
+		resp = self.comments(item)
+		self.time_db += time.time() - start_time_db
+		if resp["already_exists"]:
+		    self.toleranceNotToBeginningCount += 1
+		if self.toleranceNotToBeginningCount >= self.toleranceNotToBeginning:
+		    break
+	if self.recurse and self.recurse_depth < self.recurse_maxdepth and len(nextPageToken) > 0 and self.toleranceNotToBeginningCount < self.toleranceNotToBeginning:
+	    self.comments_list(activity_id=activity_id, maxResults=maxResults, pageToken=nextPageToken, sortOrder=sortOrder)
+	else:
+	    out["newly_added"] = self.newlyadded
+	    out["time_api"] = self.time_api
+	    out["time_db"] = self.time_db
+	    out["time_db_entities"] = self.time_db_entities
+	return out
 
     def toDB(self, tablename, data, doupdate=False, updatefirst=False):
 	if self.pgconn is None:
@@ -407,6 +534,10 @@ if __name__ == "__main__":
 	    opt = 3 # activities
 	if opt == "-al":
 	    opt = 4 # activities list
+	if opt == "-c":
+	    opt = 5 # comments
+	if opt == "-cl":
+	    opt = 6 # comments list
 
     for i in range(2, len(sys.argv)):
 	if sys.argv[i] == "-v" or sys.argv[i] == "--verbose":
@@ -417,6 +548,8 @@ if __name__ == "__main__":
 	    gp.entities = True
 	if sys.argv[i] == "-u" or sys.argv[i] == "--update":
 	    gp.doupdate = True
+	if sys.argv[i] == "-a" or sys.argv[i] == "--get-all":
+	    gp.getall = True
 
     if opt == 2:
 	try:
@@ -446,6 +579,18 @@ if __name__ == "__main__":
 	try:
 	    user_id = int(sys.argv[2])
 	    out = gp.activities_list(user_id, "public")
+	except ValueError:
+	    pass
+    elif opt == 5:
+	try:
+	    comment_id = sys.argv[2]
+	    out = gp.comments_get(comment_id)
+	except ValueError:
+	    pass
+    elif opt == 6:
+	try:
+	    activity_id = sys.argv[2]
+	    out = gp.comments_list(activity_id)
 	except ValueError:
 	    pass
 
