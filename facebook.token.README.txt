@@ -1,0 +1,6 @@
+For refreshing token...
+
+https://www.facebook.com/dialog/oauth?client_id=YOUR_APP_ID&redirect_uri=YOUR_REDIRECT_URI&scope=COMMA_SEPARATED_LIST_OF_PERMISSION_NAMES&state=SOME_ARBITRARY_BUT_UNIQUE_STRING
+
+https://graph.facebook.com/oauth/access_token?client_id=OUR_APP_ID&redirect_uri=OUR_URL&client_secret=OUR_SECRET&code=SOME_LONG_STRING
+
