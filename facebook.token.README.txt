@@ -1,6 +1,24 @@
 For refreshing token...
 
-https://www.facebook.com/dialog/oauth?client_id=YOUR_APP_ID&redirect_uri=YOUR_REDIRECT_URI&scope=COMMA_SEPARATED_LIST_OF_PERMISSION_NAMES&state=SOME_ARBITRARY_BUT_UNIQUE_STRING
+1. Get the code by pointing to the following link on a browser (won't work with Curl):
+https://www.facebook.com/dialog/oauth?client_id=APP_ID&redirect_uri=http://jmsc.hku.hk/&state=SOME_ARBITRARY_BUT_UNIQUE_STRING
+generate SOME_ARBITRARY_BUT_UNIQUE_STRING with "pwgen -n 80"
+The APP_ID is your application's ID.
 
-https://graph.facebook.com/oauth/access_token?client_id=OUR_APP_ID&redirect_uri=OUR_URL&client_secret=OUR_SECRET&code=SOME_LONG_STRING
+2. You will get a page like:
+http://jmsc.hku.hk/?state=SOME_ARBITRARY_BUT_UNIQUE_STRING&code=AQCK3PJb1_5ionN_kZL_QQyFLHVhQ8utOcB1tbkIrhQ7nIDEzUH-Tb8w99qmF-T-ruUuRLlBGQPLoWXbL2jLNxaqxl5jH1RQ0AIspiRODptcb5TvanKP5cJJofHqb0xyT09A1CrUT7N6gJIi8rsXTtqi4iBmI3wvKDCTY3zyg-5PU0BZu77SMYjcUfUV6rPIfLk#_=_
 
+Grab the value of the "code" parameter. Here it would be "AQCK3PJb1_5ionN_kZL_QQyFLHVhQ8utOcB1tbkIrhQ7nIDEzUH-Tb8w99qmF-T-ruUuRLlBGQPLoWXbL2jLNxaqxl5jH1RQ0AIspiRODptcb5TvanKP5cJJofHqb0xyT09A1CrUT7N6gJIi8rsXTtqi4iBmI3wvKDCTY3zyg-5PU0BZu77SMYjcUfUV6rPIfLk"
+
+3. Get this URL (curl or browser, etc.):
+
+https://graph.facebook.com/oauth/access_token?client_id=APP_ID&redirect_uri=http://jmsc.hku.hk/&client_secret=APP_SECRET&code=THE_CODE
+The APP_SECRET is your application's secret for the app used in step 1.
+
+Where THE_CODE is the code obtained in step 2.
+
+4. The response from this should look like:
+access_token=SOME_LONG_ACCESS_TOKEN&expires=5183074
+
+The token is valid for 60 days
+Replace it in /home/csam/code/Social/mypass.py in function getFacebookOAuth()
