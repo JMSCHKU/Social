@@ -30,7 +30,7 @@ FBPOST_TYPES = ["video", "link", "status", "photo", "music"]
 
 def getMetadata(fbid, showHeaders=False):
     params = dict()
-    params['access_token'] = APP_ID + "|" + ACCESS_TOKEN
+    params['access_token'] = ACCESS_TOKEN#APP_ID + "|" + ACCESS_TOKEN
     params['metadata'] = 1
     url = fbid + "?" + urllib.urlencode(params)
     conn = httplib.HTTPSConnection(FB_GRAPH_API)
@@ -89,6 +89,7 @@ if __name__ == "__main__":
     quiet = False
     watch = False
     is_new_insert = False
+    getmembers = True
 
     if len(sys.argv) > 1:
 	if sys.argv[1] == "?" or sys.argv[1] == "--help":
@@ -129,6 +130,8 @@ if __name__ == "__main__":
 		quiet = True
 	    if sys.argv[i] == "-w" or sys.argv[i] == "--watch":
 		watch = True
+	    if sys.argv[i] == "-nm" or sys.argv[i] == "--no-members":
+		getmembers = False
 	    if sys.argv[i] == "-t":
 		if i+1<len(sys.argv):
 		    fbobjtype = sys.argv[i+1]
@@ -168,7 +171,7 @@ if __name__ == "__main__":
 
     # get the parameters
     params = dict()
-    params['access_token'] = APP_ID + "|" + ACCESS_TOKEN
+    params['access_token'] = ACCESS_TOKEN#APP_ID + "|" + ACCESS_TOKEN
     params['fields'] = fields
     params['metadata'] = 1
     params['type'] = fbobjtype
@@ -269,6 +272,7 @@ if __name__ == "__main__":
 	    except pg.ProgrammingError:
 		try:
 		    if allowUpdate:
+			del js["retrieved"]
 			pgconn.update("facebook_users", js)
 		except pg.ProgrammingError:
 		    if not quiet:
@@ -299,6 +303,7 @@ if __name__ == "__main__":
 		    if allowUpdate:
 			if not quiet:
 			    print "Cannot insert, will update instead"
+			del js["retrieved"]
 			pgconn.update(table_name, js)
 		except pg.ProgrammingError:
 		    print "Cannot update"
@@ -317,6 +322,7 @@ if __name__ == "__main__":
 		    if allowUpdate:
 			if not quiet:
 			    print "Cannot insert, will update instead"
+			del js["retrieved"]
 			pgconn.update(table_name, js)
 		    #print "duplicate: " + js["id"]
 		except pg.ProgrammingError:
@@ -347,6 +353,7 @@ if __name__ == "__main__":
 		    if allowUpdate:
 			if not quiet:
 			    print "Cannot insert, will update instead"
+			del js["retrieved"]
 			pgconn.update(table_name, js)
 		except pg.ProgrammingError:
 		    if not quiet:
@@ -372,41 +379,42 @@ if __name__ == "__main__":
 	    else:
 		members = js["data"]
 	    print "len(members): " + str(len(members))
-	    for x in members:
-		x["name"] = x["name"].encode("utf8")
-		try:
-		    pgconn.insert("facebook_users", x)
-		    if showheader:
-			print str(x["id"]) + "\t" + x["name"]
-		except pg.ProgrammingError:
+	    if getmembers:
+		for x in members:
+		    x["name"] = x["name"].encode("utf8")
 		    try:
-			if allowUpdate:
-			    if not quiet:
-				print "Cannot insert, will update instead"
-			    pgconn.update("facebook_users", x)
-		    except pg.ProgrammingError:
-			if not quiet:
-			    print "Cannot update"
-		if fbobjtype == "group":
-		    try:
-			pgconn.insert("facebook_users_groups", {"uid":long(x["id"]),"gid":long(fbid)})
+			pgconn.insert("facebook_users", x)
 			if showheader:
-			    print "members: " + str(x["id"]) + "\t" + str(fbid)
+			    print str(x["id"]) + "\t" + x["name"]
 		    except pg.ProgrammingError:
-			pass
-		elif fbobjtype == "event":
-		    if "rsvp_status" in x:
 			try:
-			    pgconn.insert("facebook_users_events", {"uid":long(x["id"]),"eid":long(fbid),"rsvp_status":x["rsvp_status"], "retrieved": "NOW()"})
+			    if allowUpdate:
+				if not quiet:
+				    print "Cannot insert, will update instead"
+				pgconn.update("facebook_users", x)
 			except pg.ProgrammingError:
-			    pgconn.update("facebook_users_events", {"uid":long(x["id"]),"eid":long(fbid),"rsvp_status":x["rsvp_status"], "retrieved": "NOW()"})
-			if showheader:
-			    print "event: " + str(x["id"]) + "\t" + str(fbid) + "\t" + x["rsvp_status"]
-		    else:
-			pgconn.insert("facebook_users_events", {"uid":long(x["id"]),"eid":long(fbid), "retrieved": "NOW()"})
-			if showheader:
-			    print "event: " + str(x["id"]) + "\t" + str(fbid)
-		#print x
+			    if not quiet:
+				print "Cannot update"
+		    if fbobjtype == "group":
+			try:
+			    pgconn.insert("facebook_users_groups", {"uid":long(x["id"]),"gid":long(fbid)})
+			    if showheader:
+				print "members: " + str(x["id"]) + "\t" + str(fbid)
+			except pg.ProgrammingError:
+			    pass
+		    elif fbobjtype == "event":
+			if "rsvp_status" in x:
+			    try:
+				pgconn.insert("facebook_users_events", {"uid":long(x["id"]),"eid":long(fbid),"rsvp_status":x["rsvp_status"], "retrieved": "NOW()"})
+			    except pg.ProgrammingError:
+				pgconn.update("facebook_users_events", {"uid":long(x["id"]),"eid":long(fbid),"rsvp_status":x["rsvp_status"], "retrieved": "NOW()"})
+			    if showheader:
+				print "event: " + str(x["id"]) + "\t" + str(fbid) + "\t" + x["rsvp_status"]
+			else:
+			    pgconn.insert("facebook_users_events", {"uid":long(x["id"]),"eid":long(fbid), "retrieved": "NOW()"})
+			    if showheader:
+				print "event: " + str(x["id"]) + "\t" + str(fbid)
+		    #print x
 		
 	    if fbobjtype == "group":
 	       	sql_members = "SELECT COUNT(*) AS members_count FROM facebook_groups g LEFT JOIN facebook_users_groups ug ON g.id = ug.gid WHERE g.id = %d " % fbid

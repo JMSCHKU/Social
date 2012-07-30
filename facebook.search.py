@@ -105,7 +105,7 @@ if __name__ == "__main__":
 
     # get the parameters
     params = dict()
-    params["access_token"] = APP_ID + "|" + ACCESS_TOKEN
+    params["access_token"] = ACCESS_TOKEN#APP_ID + "|" + ACCESS_TOKEN
     params["metadata"] = 1
     params["fields"] = fields
     params["limit"] = limit
@@ -167,7 +167,7 @@ if __name__ == "__main__":
 	    # minor hack to prevent my friends from being indexed
 	    friends_url = "https://graph.facebook.com/me/friends"
 	    params_friends = dict()
-	    params_friends["access_token"] = APP_ID + "|" + ACCESS_TOKEN
+	    params_friends["access_token"] = ACCESS_TOKEN#APP_ID + "|" + ACCESS_TOKEN
 	    params_friends["limit"] = limit
 	    friends_url += "?" + urllib.urlencode(params_friends)
 	    try:
@@ -211,14 +211,26 @@ if __name__ == "__main__":
 		    if a in x and x[a] is not None:
 			x[a] = x[a].encode("utf8")
 		if "venue" in x:
-		    if "city" in x["venue"]:
-			x["venue"] = json.dumps(x["venue"]).encode("utf8")
-		    else:
+		    if "id" in x["venue"]:
+			x["venue"] = x["venue"]["id"].encode("utf8")
+		    elif "street" in x["venue"]:
 			x["venue"] = x["venue"]["street"].encode("utf8")
+		    #elif "city" in x["venue"]:
+			#x["venue"] = json.dumps(x["venue"]).encode("utf8")
+		    else:
+			x["venue"] = json.dumps(x["venue"]).encode("utf8")
 		if "owner" in x:
 		    x["owner"] = x["owner"]["id"]
 		if "members" in x:
 		    x["members_count"] = len(x["members"])
+		if "fan_count" in x:
+		    x["likes"] = x["fan_count"]
+		elif "likes" in x:
+		    x["fan_count"] = x["likes"]
+		else:
+		    x["likes"] = 0
+		if "likes" in x:
+		    x["fan_count"] = x["likes"]
 		table_name = str("facebook_%ss" % fbobjtype)
 		try:
 		    pgconn.insert(table_name, x)
@@ -227,7 +239,7 @@ if __name__ == "__main__":
 			if fbobjtype == "group":
 			    pgconn.query("INSERT INTO facebook_groups_watch (gid, members_count, retrieved) SELECT %(gid)d, COUNT(*), NOW() FROM facebook_users_groups WHERE gid = %(gid)d GROUP BY gid " % {"gid": x["id"]})
 			elif fbobjtype == "page":
-			    pgconn.insert(table_name + "_watch", {"pid": x["id"], "retrieved": "NOW()", "fan_count": x["fan_count"]})
+			    pgconn.insert(table_name + "_watch", {"pid": x["id"], "retrieved": "NOW()", "fan_count": x["likes"]})
 		except pg.ProgrammingError:
 		    try:
 			if allowUpdate:
