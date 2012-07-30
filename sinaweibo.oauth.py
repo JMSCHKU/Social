@@ -29,7 +29,7 @@ import sinaweibolucene
 class SinaWeiboOauth():
     sinaweiboOauth = mypass.getSinaWeiboOauth()
     pgconn = None
-    toleranceNotToBeginning = 5 # in fetching timelines, break from loop when toleranceNotToBeginning consecutive statuses already exist in the DB
+    toleranceNotToBeginning = 3 # in fetching timelines, break from loop when toleranceNotToBeginning consecutive statuses already exist in the DB
     toleranceNotToBeginningLong = 150 # for reposts
     max_gotall_count = 3
     api_wait_secs = 5
@@ -134,7 +134,7 @@ class SinaWeiboOauth():
 	x = dict()
 	x["created_at"] = self.getAtt(user, "created_at").strftime("%Y-%m-%d %H:%M:%S")
 	x["retrieved"] = "NOW()"
-	for a in ["name", "screen_name", "location", "description", "profile_image_url", "url"]:
+	for a in ["name", "screen_name", "location", "description", "profile_image_url", "url", "avatar_large", "verified_reason"]:
 	    try:
 		att = self.getAtt(user, a)
 		x[a] = att.encode("utf8")
@@ -172,14 +172,19 @@ class SinaWeiboOauth():
 		api_misses += 1
 		if api_misses >= self.max_api_misses:
 		    return { "msg": e.reason }
-		if e.reason.find("Error: target weibo does not exist!") >= 0:
+		#if e.reason.find("Error: target weibo does not exist!") >= 0:
+		if e.reason is not None and ("target weibo does not exist" in e.reason.lower() or "permission denied" in e.reason.lower()):
 		    try:
 			rps = self.getRangePartitionByIds([id])
 		    	for x in rps:
 			    yw = x.split(",")
 			    year = int(yw[0])
 			    week = int(yw[1])
-			    sql_deleted = "UPDATE rp_sinaweibo_y%(year)dw%(week)d SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "year": year, "week": week, "id": id }
+			    permission_sql = ""
+			    if "permission denied" in e.reason.lower():
+				permission_sql = ", permission_denied = true"
+			    sql_deleted = "UPDATE rp_sinaweibo_y%(year)dw%(week)d SET deleted = NOW() %(permission)s WHERE id = %(id)d AND deleted IS NULL " % { "id": id, "year": year, "week": week, "permission": permission_sql }
+			    #sql_deleted = "UPDATE rp_sinaweibo_y%(year)dw%(week)d SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "year": year, "week": week, "id": id }
 			    if self.pgconn is None:
 				self.pgconn = mypass.getConn()
 			    res = self.pgconn.query(sql_deleted)
@@ -278,7 +283,11 @@ class SinaWeiboOauth():
 			    yw = x.split(",")
 			    year = int(yw[0])
 			    week = int(yw[1])
-			    sql_deleted = "UPDATE rp_sinaweibo_y%(year)dw%(week)d SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "year": year, "week": week, "id": id }
+			    permission_sql = ""
+			    if "permission denied" in e.reason.lower():
+				permission_sql = ", permission_denied = true"
+			    sql_deleted = "UPDATE rp_sinaweibo_y%(year)dw%(week)d SET deleted = NOW() %(permission)s WHERE id = %(id)d AND deleted IS NULL " % { "id": id, "year": year, "week": week, "permission": permission_sql }
+			    #sql_deleted = "UPDATE rp_sinaweibo_y%(year)dw%(week)d SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "year": year, "week": week, "id": id }
 			    if self.pgconn is None:
 				self.pgconn = mypass.getConn()
 			    res = self.pgconn.query(sql_deleted)
