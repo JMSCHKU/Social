@@ -43,14 +43,18 @@ class SinaWeiboOauth():
     rp_dir = "/var/data/sinaweibo/rp"
     comments_dir = "/var/data/sinaweibo/comments"
     reposts_dir = "/var/data/sinaweibo/reposts"
+    timelines_dir = "/var/data/sinaweibo/timelines"
+    timeline_ids = list()
     verbose = False
     getall = False
     force_screenname = False
     checkonly = False
     doupdate = False
     saveRP = False
+    rt = False # Don't store the retweet
     index = False
     indexer = None
+    doublecheck = False # If we get a blank timeline, it may just be an error, so we log it
 
     def __init__(self):
 	socket.setdefaulttimeout(300)
@@ -89,14 +93,24 @@ class SinaWeiboOauth():
 		x[a] = att.encode("utf8")
 	    except:
 		x[a] = att
-	for a in ["id", "in_reply_to_user_id", "in_reply_to_status_id", "truncated", "reposts_count", "comments_count", "mlevel", "deleted"]:
+	for a in ["id", "in_reply_to_user_id", "in_reply_to_status_id", "truncated", "reposts_count", "comments_count", "attitudes_count", "mlevel", "deleted"]:
 	    x[a] = self.getAtt(status, a)
 	try:
 	    rts = self.getAtt(self.getAtt(status, "retweeted_status"), "id")
 	except:
 	    rts = None
+	try:
+	    rts_user_id = self.getAtt(self.getAtt(self.getAtt(status, "retweeted_status"), "user"), "id")
+	except:
+	    rts_user_id = None
 	if rts is not None:
+	    if self.rt:
+		rt_obj = self.getAtt(status, "retweeted_status")
+		if self.getAtt(rt_obj, "created_at") is not None:
+		    x["rt"] = self.status_to_row(rt_obj)
 	    x["retweeted_status"] = rts
+	if rts_user_id is not None:
+	    x["retweeted_status_user_id"] = rts_user_id
 	try:
 	    user_id = self.getAtt(self.getAtt(status, "user"), "id")
 	except:
@@ -148,7 +162,7 @@ class SinaWeiboOauth():
 		x[a] = att
 	for a in ["id", "province", "city", "domain", "gender", "followers_count", "friends_count", "favourites_count", \
 "time_zone", "profile_background_image_url", "profile_use_background_image", "allow_all_act_msg", "geo_enabled", \
-"verified", "following", "statuses_count", "allow_all_comment", "bi_followers_count", "deleted", "verified_type", "lang"]:
+"verified", "following", "statuses_count", "allow_all_comment", "bi_followers_count", "deleted", "verified_type", "lang", "online_status"]:
 	    x[a] = self.getAtt(user, a)
 	return x
 
@@ -179,7 +193,7 @@ class SinaWeiboOauth():
 		api_misses += 1
 		if api_misses >= self.max_api_misses:
 		    return { "msg": e.reason }
-		if e.reason.find("target weibo does not exist") >= 0:
+		if e.reason is not None and ("target weibo does not exist" in e.reason.lower() or "permission denied" in e.reason.lower()):
 		    out = { "msg": e.reason }
 		    try:
 			'''
@@ -194,7 +208,11 @@ class SinaWeiboOauth():
 			'''
 			if self.pgconn is None:
 		    	    self.pgconn = mypass.getConn()
-			sql_deleted = "UPDATE rp_sinaweibo SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "id": id }
+			permission_sql = ""
+			if "permission denied" in e.reason.lower():
+			    permission_sql = ", permission_denied = true"
+			sql_deleted = "UPDATE rp_sinaweibo SET deleted = NOW() %(permission)s WHERE id = %(id)d AND deleted IS NULL " % { "id": id, "permission": permission_sql }
+			print "deleted %d " % id
 		    	res = self.pgconn.query(sql_deleted)
 			sql_status = "SELECT * FROM rp_sinaweibo WHERE id = %(id)d " % { "id": id }
 			res_status = self.pgconn.query(sql_status).dictresult()
@@ -209,6 +227,9 @@ class SinaWeiboOauth():
 	if self.saveRP:
 	    self.saveRangePartitionByIdDate(id, self.getAtt(status, "created_at"))
 	row = self.status_to_row(status)
+	row_rt = None
+	if "rt" in row:
+	    row_rt = row["rt"]
 	r = dict()
 	if "deleted" in row and row["deleted"] is not None and (row["deleted"] == "1" or row["deleted"] == 1 or row["deleted"] is True):
 	    if self.pgconn is None:
@@ -226,6 +247,9 @@ class SinaWeiboOauth():
 	    tablename = self.getRangePartitionByDate(self.getAtt(status, "created_at"))
 	    #tablename = "rp_sinaweibo"
     	    resp = self.toDB(tablename, row, self.doupdate)
+	    if row_rt is not None and self.rt:
+		tablename_rt = self.getRangePartitionByDate(self.getAtt(self.getAtt(status, "retweeted_status"), "created_at"))
+		resp_rt = self.toDB(tablename_rt, row_rt, self.doupdate)
 	    time_db += time.time() - start_time_db
 	    r = resp
 	    resp["time_db"] = time_db
@@ -280,8 +304,16 @@ class SinaWeiboOauth():
 	time_api = time.time() - start_time_api
 	r = self.status_timeline(timeline, toBeginning=False, user_id=user_id)
 	if "count" in r and r["count"] == 0:
-	    if self.pgconn is None:
-    		self.pgconn = mypass.getConn()
+	    if self.doublecheck is not False:
+		try:
+		    fdc = open(self.doublecheck, "a")
+		    fdc.write("\n" + str(user_id))
+		    fdc.close()
+		    print "wrote to %s " + self.doublecheck
+		except:
+		    pass
+	    #if self.pgconn is None:
+    		#self.pgconn = mypass.getConn()
 	    #self.pgconn.query("UPDATE sinaweibo_users SET posts_updated = NOW() WHERE id = %d" % user_id)
 	r["time_api"] = time_api
 	r["page"] = page
@@ -300,7 +332,7 @@ class SinaWeiboOauth():
 		api_misses += 1
 		if api_misses == self.max_api_misses:
 		    return { "msg": e.reason }
-		if e.reason.find("target weibo does not exist") >= 0:
+		if e.reason is not None and ("target weibo does not exist" in e.reason.lower() or "permission denied" in e.reason.lower()):
 		    try:
 			'''
 			rps = self.getRangePartitionByIds([id])
@@ -313,9 +345,12 @@ class SinaWeiboOauth():
 				self.pgconn = mypass.getConn()
 			    res = self.pgconn.query(sql_deleted)
 			'''
+			permission_sql = ""
+			if "permission denied" in e.reason.lower():
+			    permission_sql = ", permission_denied = true"
 			if self.pgconn is None:
 		    	    self.pgconn = mypass.getConn()
-			sql_deleted = "UPDATE rp_sinaweibo SET deleted = NOW() WHERE id = %(id)d AND deleted IS NULL " % { "id": id }
+			sql_deleted = "UPDATE rp_sinaweibo SET deleted = NOW() %(permission)s WHERE id = %(id)d AND deleted IS NULL " % { "id": id, "permission": permission_sql }
 		    	res = self.pgconn.query(sql_deleted)
 		    except pg.ProgrammingError, pg.InternalError:
 			print self.pgconn.error
@@ -345,6 +380,9 @@ class SinaWeiboOauth():
 	newlyadded = 0
         for l in statuses:
 	    x = self.status_to_row(l)
+	    x_rt = None
+	    if "rt" in x:
+		x_rt = x["rt"]
 	    if toDB:
 		start_time_db = time.time()
 		if ("user_id" not in x or ("user_id" in x and x["user_id"] is None)) and user_id is not None:
@@ -372,6 +410,9 @@ class SinaWeiboOauth():
 		tablename = self.getRangePartitionByDate(self.getAtt(l, "created_at"))
 		#tablename = "rp_sinaweibo"
 		resp = self.toDB(tablename, x)
+    		if x_rt is not None and self.rt:
+    		    tablename_rt = self.getRangePartitionByDate(self.getAtt(self.getAtt(l, "retweeted_status"), "created_at"))
+    		    resp_rt = self.toDB(tablename_rt, x_rt, self.doupdate)
 		time_db += time.time() - start_time_db
 		if not resp["already_exists"] and resp["success"] and not isSingleUser:
 		    timeline_user = self.getAtt(l, "user")
@@ -422,6 +463,12 @@ class SinaWeiboOauth():
 	    print resp_u
 	    time_db_u += time.time() - start_time_db_u
 	    r["user_id"] = u["id"]
+	if isSingleUser and len(statuses) > 0:
+	    for s in statuses:
+		try:
+		    self.timeline_ids.append(self.getAtt(s, "id"))
+		except:
+		    pass
 	if toDB:
 	    if toBeginning:
 		r["already_exists_count"] = already_exists_count 
@@ -748,6 +795,15 @@ class SinaWeiboOauth():
 	    out = self.user_timeline(id)
 	    if "count" in out and out["count"] == 0: # see if the user was just deleted
 		out_user = self.user(id)
+	    # save timeline ids
+	    if len(self.timeline_ids) > 0:
+		#print self.timeline_ids
+		umask = os.umask(0)
+		fo = open(self.timelines_dir + "/current/" + str(id), "w")
+		for timeline_id in self.timeline_ids:
+		    fo.write(str(timeline_id)+"\n")
+		fo.close()
+		os.umask(umask)
 	elif opt == 2: # user
 	    if self.force_screenname:
 		out = self.user(None, id)
@@ -879,7 +935,7 @@ class SinaWeiboOauth():
 		fo.close()
 		os.umask(umask)
 	elif opt == 9: # single status
-	    out = self.get_status(id)
+	    out = self.get_status(id, getUser=True)
 	    if"deleted" in out and "user_id" in out:
 		out_user = self.user(out["user_id"])
 	    if output_counts:
@@ -958,8 +1014,12 @@ if __name__ == "__main__":
     	    sw.doupdate = True
 	elif sys.argv[i] == "-srp" or sys.argv[i] == "--save-range-partition":
 	    sw.saveRP = True
+	elif sys.argv[i] == "-rt" or sys.argv[i] == "--retweet":
+	    sw.rt = True
 	elif sys.argv[i] == "-i" or sys.argv[i] == "--index":
 	    sw.index = True
+	elif sys.argv[i] == "-dc" or sys.argv[i] == "--double-check":
+    	    sw.doublecheck = str(sys.argv[i+1])
 
     # bind token and set the api
     sw.setToken(sw.sinaweiboOauth["oauth_token"], sw.sinaweiboOauth["oauth_token_secret"]) 
