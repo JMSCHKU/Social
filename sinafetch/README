@@ -1,0 +1,3 @@
+= sinafetch.py
+fetch data from sina weibo using sina open API 2 and oauth2.
+
